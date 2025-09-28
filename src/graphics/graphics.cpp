@@ -95,6 +95,8 @@ public:
     bool framebuffer_resized = false;
 
     static void framebuffer_resize_callback(GLFWwindow* window, int width, int height) {
+        (void)width;  // Suppress unused parameter warning
+        (void)height; // Suppress unused parameter warning
         auto* impl = reinterpret_cast<Impl*>(glfwGetWindowUserPointer(window));
         impl->framebuffer_resized = true;
     }
@@ -773,6 +775,7 @@ public:
     }
 
     void update(std::chrono::milliseconds delta_time) {
+        (void)delta_time; // Suppress unused parameter warning
         glfwPollEvents();
     }
 
