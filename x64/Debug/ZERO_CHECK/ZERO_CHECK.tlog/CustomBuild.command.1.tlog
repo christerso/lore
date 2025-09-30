@@ -1,0 +1,10 @@
+^G:\REPOS\LORE\CMAKEFILES\0F8471BF06EB7B7143B1286FBD3A9F42\GENERATE.STAMP.RULE
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SG:/repos/lore -BG:/repos/lore --check-stamp-list CMakeFiles/generate.stamp.list --vs-solution-file G:/repos/lore/Lore.sln
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

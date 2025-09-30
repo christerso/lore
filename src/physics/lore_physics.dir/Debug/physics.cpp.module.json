@@ -1,0 +1,14 @@
+{
+    "version": 1,
+    "revision": 0,
+    "rules": [
+        {
+            "primary-output": "lore_physics.dir\\Debug\\physics.obj",
+            "outputs": [
+                "G:\\repos\\lore\\src\\physics\\Debug\\lore_physics.pdb",
+                "lore_physics.dir\\Debug\\"
+            ],
+            "requires": []
+        }
+    ]
+}

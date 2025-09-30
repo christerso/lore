@@ -1,0 +1,347 @@
+#version 450
+
+// GPU Directional Audio Processing Compute Shader
+// Processes directional audio source patterns with complete GPU autonomy
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+#define DIRECTIVITY_OMNIDIRECTIONAL 0
+#define DIRECTIVITY_CARDIOID 1
+#define DIRECTIVITY_SUPERCARDIOID 2
+#define DIRECTIVITY_HYPERCARDIOID 3
+#define DIRECTIVITY_BIDIRECTIONAL 4
+#define DIRECTIVITY_SHOTGUN 5
+#define DIRECTIVITY_CUSTOM 6
+
+#define PI 3.14159265359
+#define TWO_PI 6.28318530718
+
+struct DirectionalAudioSource {
+    vec3 position;
+    uint directivity_pattern;
+    vec3 forward_direction;
+    float inner_cone_angle;
+    float outer_cone_angle;
+    float outer_cone_gain;
+    float directivity_sharpness;
+    float volume;
+
+    // HRTF processing parameters
+    uint enable_hrtf;
+    float head_radius;
+    float ear_distance;
+
+    // Binaural audio enhancement
+    uint enable_binaural;
+    float crossfeed_amount;
+    float phase_shift_amount;
+
+    // Computed gains (output)
+    float calculated_left_gain;
+    float calculated_right_gain;
+    float directivity_gain;
+
+    uint padding[2];
+};
+
+struct AudioListener {
+    vec3 position;
+    float gain;
+    vec3 forward;
+    float distance_attenuation;
+    vec3 up;
+    uint padding;
+};
+
+struct CustomDirectivityData {
+    float response[361]; // 0-360 degrees response curve
+};
+
+layout(set = 0, binding = 0, std430) restrict buffer AudioSourceBuffer {
+    DirectionalAudioSource audio_sources[];
+};
+
+layout(set = 0, binding = 1, std430) restrict buffer ListenerBuffer {
+    AudioListener listeners[];
+};
+
+layout(set = 0, binding = 2, std430) restrict buffer CustomDirectivityBuffer {
+    CustomDirectivityData custom_patterns[];
+};
+
+layout(push_constant) uniform PushConstants {
+    uint num_sources;
+    uint num_listeners;
+    float speed_of_sound;
+    float time_delta;
+} push_constants;
+
+// HRTF lookup table approximation for realistic 3D positioning
+float hrtf_azimuth_response(float azimuth_rad, bool is_left_ear) {
+    float azimuth_deg = degrees(azimuth_rad);
+
+    // Simplified HRTF based on measured data
+    if (is_left_ear) {
+        if (azimuth_deg >= -90.0 && azimuth_deg <= 90.0) {
+            // Left ear has stronger response for left-side sources
+            return 0.7 + 0.3 * cos(azimuth_rad);
+        } else {
+            // Head shadowing for right-side sources
+            return 0.3 + 0.2 * cos(azimuth_rad + PI);
+        }
+    } else {
+        if (azimuth_deg >= -90.0 && azimuth_deg <= 90.0) {
+            // Right ear has weaker response for left-side sources due to head shadowing
+            return 0.3 + 0.2 * cos(azimuth_rad);
+        } else {
+            // Right ear has stronger response for right-side sources
+            return 0.7 + 0.3 * cos(azimuth_rad + PI);
+        }
+    }
+}
+
+float hrtf_elevation_response(float elevation_rad) {
+    // Pinna filtering effect - simplified model
+    float elevation_deg = degrees(elevation_rad);
+
+    // Peak response around ear level (0 degrees)
+    // Reduced response above and below
+    return 0.8 + 0.2 * cos(elevation_rad);
+}
+
+float calculate_head_shadowing(float azimuth_rad, float head_radius, float frequency) {
+    // Calculate head shadowing effect based on frequency
+    float head_circumference = TWO_PI * head_radius;
+    float wavelength = push_constants.speed_of_sound / frequency;
+
+    if (wavelength > head_circumference) {
+        // Low frequency - minimal shadowing
+        return 1.0;
+    } else {
+        // High frequency - significant shadowing
+        float shadow_intensity = 1.0 - (wavelength / head_circumference);
+        return 1.0 - shadow_intensity * 0.4 * abs(sin(azimuth_rad));
+    }
+}
+
+float calculate_inter_aural_time_difference(float azimuth_rad, float head_radius) {
+    // ITD calculation based on spherical head model
+    return (head_radius * sin(azimuth_rad)) / push_constants.speed_of_sound;
+}
+
+float calculate_directivity_gain(DirectionalAudioSource source, vec3 to_listener) {
+    if (source.directivity_pattern == DIRECTIVITY_OMNIDIRECTIONAL) {
+        return 1.0;
+    }
+
+    // Normalize direction to listener
+    vec3 listener_direction = normalize(to_listener);
+
+    // Calculate angle between forward direction and listener direction
+    float dot_product = dot(source.forward_direction, listener_direction);
+    float angle_rad = acos(clamp(dot_product, -1.0, 1.0));
+    float angle_deg = degrees(angle_rad);
+
+    float gain = 1.0;
+
+    switch (source.directivity_pattern) {
+        case DIRECTIVITY_CARDIOID:
+            // Cardioid pattern: gain = 0.5 * (1 + cos(angle))
+            gain = 0.5 * (1.0 + cos(angle_rad));
+            break;
+
+        case DIRECTIVITY_SUPERCARDIOID:
+            // Supercardioid: tighter than cardioid with slight rear pickup
+            gain = 0.37 * (1.0 + 1.7 * cos(angle_rad));
+            gain = max(gain, 0.1); // Small rear pickup
+            break;
+
+        case DIRECTIVITY_HYPERCARDIOID:
+            // Hypercardioid: very tight, minimal side pickup
+            gain = 0.25 * (1.0 + 3.0 * cos(angle_rad));
+            gain = max(gain, 0.05); // Minimal rear pickup
+            break;
+
+        case DIRECTIVITY_BIDIRECTIONAL:
+            // Figure-8 pattern: gain = |cos(angle)|
+            gain = abs(cos(angle_rad));
+            break;
+
+        case DIRECTIVITY_SHOTGUN:
+            // Extremely directional: rapid falloff outside narrow cone
+            if (angle_deg <= source.inner_cone_angle * 0.5) {
+                gain = 1.0;
+            } else if (angle_deg <= source.outer_cone_angle * 0.5) {
+                float t = (angle_deg - source.inner_cone_angle * 0.5) /
+                         (source.outer_cone_angle * 0.5 - source.inner_cone_angle * 0.5);
+                gain = 1.0 - t * (1.0 - source.outer_cone_gain);
+            } else {
+                // Sharp exponential falloff beyond outer cone
+                float excess_angle = angle_deg - source.outer_cone_angle * 0.5;
+                gain = source.outer_cone_gain * exp(-excess_angle * 0.1 * source.directivity_sharpness);
+            }
+            break;
+
+        case DIRECTIVITY_CUSTOM:
+            // Use custom response curve
+            if (gl_GlobalInvocationID.x < custom_patterns.length()) {
+                int index = int(angle_deg);
+                index = clamp(index, 0, 360);
+                gain = custom_patterns[gl_GlobalInvocationID.x].response[index];
+            }
+            break;
+    }
+
+    // Apply cone-based attenuation for non-custom patterns
+    if (source.directivity_pattern != DIRECTIVITY_CUSTOM &&
+        source.directivity_pattern != DIRECTIVITY_OMNIDIRECTIONAL) {
+        if (angle_deg > source.inner_cone_angle * 0.5) {
+            if (angle_deg <= source.outer_cone_angle * 0.5) {
+                // Smooth transition between inner and outer cone
+                float t = (angle_deg - source.inner_cone_angle * 0.5) /
+                         (source.outer_cone_angle * 0.5 - source.inner_cone_angle * 0.5);
+                t = pow(t, source.directivity_sharpness); // Apply sharpness
+                gain *= (1.0 - t * (1.0 - source.outer_cone_gain));
+            } else {
+                // Outside outer cone
+                gain *= source.outer_cone_gain;
+            }
+        }
+    }
+
+    return clamp(gain, 0.0, 1.0);
+}
+
+void apply_hrtf_processing(inout DirectionalAudioSource source, vec3 to_listener,
+                          AudioListener listener) {
+    if (source.enable_hrtf == 0) {
+        return;
+    }
+
+    // Calculate listener's right vector
+    vec3 listener_right = cross(listener.forward, listener.up);
+
+    // Normalize direction to listener
+    vec3 source_direction = normalize(-to_listener); // Direction from listener to source
+
+    // Calculate azimuth (horizontal angle)
+    float azimuth = atan(dot(source_direction, listener_right),
+                        dot(source_direction, listener.forward));
+
+    // Calculate elevation (vertical angle)
+    float elevation = asin(clamp(dot(source_direction, listener.up), -1.0, 1.0));
+
+    // Distance-based calculations
+    float distance = length(to_listener);
+
+    // Calculate inter-aural time difference (ITD)
+    float itd = calculate_inter_aural_time_difference(azimuth, source.head_radius);
+
+    // Calculate head shadowing for typical frequency (1kHz)
+    float frequency = 1000.0;
+    float shadow_factor = calculate_head_shadowing(azimuth, source.head_radius, frequency);
+
+    // Apply HRTF gains
+    float left_response = hrtf_azimuth_response(azimuth, true) * hrtf_elevation_response(elevation);
+    float right_response = hrtf_azimuth_response(azimuth, false) * hrtf_elevation_response(elevation);
+
+    // Enhanced HRTF calculations for realistic 3D positioning
+    if (azimuth >= 0) {
+        // Source on the right side
+        source.calculated_right_gain *= (0.7 + 0.3 * cos(azimuth * 0.5)) *
+                                       hrtf_elevation_response(elevation) * shadow_factor;
+        source.calculated_left_gain *= (0.3 + 0.2 * cos(azimuth * 0.5)) *
+                                      hrtf_elevation_response(elevation);
+    } else {
+        // Source on the left side
+        source.calculated_left_gain *= (0.7 + 0.3 * cos(abs(azimuth) * 0.5)) *
+                                      hrtf_elevation_response(elevation) * shadow_factor;
+        source.calculated_right_gain *= (0.3 + 0.2 * cos(abs(azimuth) * 0.5)) *
+                                       hrtf_elevation_response(elevation);
+    }
+
+    // Apply binaural enhancement if enabled
+    if (source.enable_binaural != 0) {
+        // Cross-feed for more natural sound
+        float original_left = source.calculated_left_gain;
+        float original_right = source.calculated_right_gain;
+
+        source.calculated_left_gain = original_left + source.crossfeed_amount * original_right;
+        source.calculated_right_gain = original_right + source.crossfeed_amount * original_left;
+
+        // Apply phase shift for enhanced spatialization
+        float phase_enhancement = source.phase_shift_amount * sin(azimuth);
+        source.calculated_left_gain *= (1.0 + phase_enhancement);
+        source.calculated_right_gain *= (1.0 - phase_enhancement);
+    }
+
+    // Distance-based high-frequency rolloff
+    if (distance > 1.0) {
+        float hf_rolloff = 1.0 / (1.0 + distance * 0.1);
+        source.calculated_left_gain *= hf_rolloff;
+        source.calculated_right_gain *= hf_rolloff;
+    }
+
+    // Clamp gains to valid range
+    source.calculated_left_gain = clamp(source.calculated_left_gain, 0.0, 2.0);
+    source.calculated_right_gain = clamp(source.calculated_right_gain, 0.0, 2.0);
+}
+
+void main() {
+    uint source_idx = gl_GlobalInvocationID.x;
+
+    if (source_idx >= push_constants.num_sources || source_idx >= audio_sources.length()) {
+        return;
+    }
+
+    DirectionalAudioSource source = audio_sources[source_idx];
+
+    // Find the active listener (assumes first listener is active)
+    if (push_constants.num_listeners == 0 || listeners.length() == 0) {
+        return;
+    }
+
+    AudioListener listener = listeners[0];
+
+    // Calculate 3D audio parameters
+    vec3 source_to_listener = listener.position - source.position;
+    float distance = length(source_to_listener);
+
+    if (distance > 1e-6) {
+        // Calculate directivity gain
+        source.directivity_gain = calculate_directivity_gain(source, source_to_listener);
+
+        // Initialize base gain values
+        source.calculated_left_gain = 0.5;
+        source.calculated_right_gain = 0.5;
+
+        // Calculate base azimuth positioning for non-HRTF sources
+        vec3 listener_right = cross(listener.forward, listener.up);
+        vec3 source_direction = source_to_listener / distance;
+        float dot_right = dot(source_direction, listener_right);
+        float dot_front = dot(source_direction, listener.forward);
+
+        // Calculate base azimuth positioning
+        float azimuth = atan(dot_right, dot_front);
+        source.calculated_left_gain = 0.5 + 0.5 * cos(azimuth + PI * 0.25);
+        source.calculated_right_gain = 0.5 + 0.5 * cos(azimuth - PI * 0.25);
+
+        // Apply advanced HRTF processing with directional enhancements
+        apply_hrtf_processing(source, source_to_listener, listener);
+
+        // Apply directivity gain to final output
+        source.calculated_left_gain *= source.directivity_gain;
+        source.calculated_right_gain *= source.directivity_gain;
+
+        // Apply master volume
+        source.calculated_left_gain *= source.volume;
+        source.calculated_right_gain *= source.volume;
+    } else {
+        // Source at listener position
+        source.calculated_left_gain = source.volume * 0.5;
+        source.calculated_right_gain = source.volume * 0.5;
+        source.directivity_gain = 1.0;
+    }
+
+    // Write back updated source
+    audio_sources[source_idx] = source;
+}

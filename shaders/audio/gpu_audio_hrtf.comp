@@ -1,0 +1,393 @@
+#version 450
+
+// GPU HRTF Processing Compute Shader
+// Complete HRTF implementation with sophisticated head modeling
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+// Audio source data
+layout(std140, binding = 0) readonly buffer AudioSourceBuffer {
+    uint entity_id;
+    vec4 position;
+    vec4 velocity;
+    float volume;
+    float pitch;
+    float min_distance;
+    float max_distance;
+    float rolloff_factor;
+    uint is_3d;
+    uint is_playing;
+    uint has_directional;
+    uint padding[1];
+} audio_sources[];
+
+// Directional audio source data
+layout(std140, binding = 1) readonly buffer DirectionalSourceBuffer {
+    uint entity_id;
+    vec4 forward_direction;
+    uint directivity_pattern;
+    float inner_cone_angle;
+    float outer_cone_angle;
+    float outer_cone_gain;
+    float directivity_sharpness;
+    uint enable_hrtf;
+    uint enable_binaural;
+    float head_radius;
+    float ear_distance;
+    float crossfeed_amount;
+    float phase_shift_amount;
+    float custom_response[361];
+    uint custom_response_count;
+    uint padding[3];
+} directional_sources[];
+
+// Listener data
+layout(std140, binding = 2) readonly buffer ListenerBuffer {
+    uint entity_id;
+    vec4 position;
+    vec4 velocity;
+    vec4 forward_direction;
+    vec4 up_direction;
+    vec4 right_direction;
+    float gain;
+    uint is_active;
+    uint padding[2];
+} listeners[];
+
+// HRTF output buffer
+layout(std140, binding = 3) writeonly buffer HRTFOutputBuffer {
+    float left_gain;
+    float right_gain;
+    float itd_delay_samples;
+    float ild_gain_db;
+    float directivity_gain;
+    float distance_attenuation;
+    uint entity_id;
+    uint padding[1];
+} hrtf_outputs[];
+
+// Push constants for frame parameters
+layout(push_constant) uniform PushConstants {
+    float delta_time;
+    float current_time;
+    float sound_speed;
+    float doppler_factor;
+    float master_volume;
+    uint source_count;
+    uint directional_count;
+    uint listener_count;
+    float environmental_room_size;
+    float environmental_absorption;
+} params;
+
+// Constants
+const float PI = 3.14159265359;
+const float SPEED_OF_SOUND = 343.0;
+const float MAX_ITD_SECONDS = 0.0007;
+const float SAMPLE_RATE = 48000.0;
+
+// Directivity pattern constants
+const uint OMNIDIRECTIONAL = 0;
+const uint CARDIOID = 1;
+const uint SUPERCARDIOID = 2;
+const uint HYPERCARDIOID = 3;
+const uint BIDIRECTIONAL = 4;
+const uint SHOTGUN = 5;
+const uint CUSTOM = 6;
+
+// Calculate sophisticated directivity gain
+float calculate_directivity_gain(uint pattern, vec3 forward_dir, vec3 to_listener,
+                                float inner_angle, float outer_angle, float outer_gain,
+                                float sharpness, float custom_response[361], uint custom_count) {
+    if (pattern == OMNIDIRECTIONAL) {
+        return 1.0;
+    }
+
+    vec3 listener_dir = normalize(to_listener);
+    float dot_product = dot(forward_dir, listener_dir);
+    float angle_rad = acos(clamp(dot_product, -1.0, 1.0));
+    float angle_deg = degrees(angle_rad);
+
+    float gain = 1.0;
+
+    switch (pattern) {
+        case CARDIOID:
+            // Cardioid pattern: gain = 0.5 * (1 + cos(angle))
+            gain = 0.5 * (1.0 + cos(angle_rad));
+            break;
+
+        case SUPERCARDIOID:
+            // Supercardioid: tighter than cardioid with slight rear pickup
+            gain = 0.37 * (1.0 + 1.7 * cos(angle_rad));
+            gain = max(gain, 0.1); // Small rear pickup
+            break;
+
+        case HYPERCARDIOID:
+            // Hypercardioid: very tight, minimal side pickup
+            gain = 0.25 * (1.0 + 3.0 * cos(angle_rad));
+            gain = max(gain, 0.05); // Minimal rear pickup
+            break;
+
+        case BIDIRECTIONAL:
+            // Figure-8 pattern: gain = |cos(angle)|
+            gain = abs(cos(angle_rad));
+            break;
+
+        case SHOTGUN:
+            // Extremely directional: rapid falloff outside narrow cone
+            if (angle_deg <= inner_angle * 0.5) {
+                gain = 1.0;
+            } else if (angle_deg <= outer_angle * 0.5) {
+                float t = (angle_deg - inner_angle * 0.5) / (outer_angle * 0.5 - inner_angle * 0.5);
+                gain = 1.0 - t * (1.0 - outer_gain);
+            } else {
+                float excess_angle = angle_deg - outer_angle * 0.5;
+                gain = outer_gain * exp(-excess_angle * 0.1 * sharpness);
+            }
+            break;
+
+        case CUSTOM:
+            // Use custom response curve
+            if (custom_count >= 361) {
+                int index = int(angle_deg);
+                index = clamp(index, 0, 360);
+                gain = custom_response[index];
+            }
+            break;
+    }
+
+    // Apply cone-based attenuation for non-custom patterns
+    if (pattern != CUSTOM && pattern != OMNIDIRECTIONAL) {
+        if (angle_deg > inner_angle * 0.5) {
+            if (angle_deg <= outer_angle * 0.5) {
+                float t = (angle_deg - inner_angle * 0.5) / (outer_angle * 0.5 - inner_angle * 0.5);
+                t = pow(t, sharpness);
+                gain *= (1.0 - t * (1.0 - outer_gain));
+            } else {
+                gain *= outer_gain;
+            }
+        }
+    }
+
+    return clamp(gain, 0.0, 1.0);
+}
+
+// Enhanced HRTF processing with sophisticated head modeling
+void apply_hrtf_processing(vec3 source_pos, vec3 listener_pos, vec3 listener_forward,
+                          vec3 listener_up, vec3 listener_right, float head_radius,
+                          float ear_distance, float crossfeed, float phase_shift,
+                          bool enable_binaural, inout float left_gain, inout float right_gain,
+                          out float itd_samples, out float ild_db) {
+
+    vec3 to_listener = listener_pos - source_pos;
+    float distance = length(to_listener);
+    vec3 source_direction = normalize(-to_listener);
+
+    // Calculate azimuth (horizontal angle)
+    float azimuth = atan(dot(source_direction, listener_right), dot(source_direction, listener_forward));
+
+    // Calculate elevation (vertical angle)
+    float elevation = asin(clamp(dot(source_direction, listener_up), -1.0, 1.0));
+
+    // Enhanced ITD calculation with Woodworth formula and spherical head model
+    float head_circumference = 2.0 * PI * head_radius;
+    float azimuth_abs = abs(azimuth);
+
+    // Woodworth ITD formula with spherical head model enhancement
+    float path_difference = head_radius * (azimuth_abs + sin(azimuth_abs));
+    float itd = path_difference / SPEED_OF_SOUND;
+    itd = clamp(itd, -MAX_ITD_SECONDS, MAX_ITD_SECONDS);
+    itd_samples = itd * SAMPLE_RATE;
+
+    // Frequency-dependent ILD with sophisticated head shadowing
+    float calculate_head_shadow(float freq) {
+        float wavelength = SPEED_OF_SOUND / freq;
+        float ka = 2.0 * PI * head_radius / wavelength;
+
+        if (ka < 1.0) {
+            // Low frequency: minimal shadowing
+            return 1.0 - 0.1 * abs(sin(azimuth)) * ka;
+        } else if (ka < 3.0) {
+            // Mid frequency: moderate shadowing
+            return 1.0 - 0.4 * abs(sin(azimuth)) * (ka / 3.0);
+        } else {
+            // High frequency: strong shadowing with pinna effects
+            float base_shadow = 1.0 - 0.7 * abs(sin(azimuth));
+            float pinna_effect = 1.0 - 0.2 * sin(elevation * 2.0);
+            return base_shadow * pinna_effect;
+        }
+    }
+
+    float shadow_factor_low = calculate_head_shadow(250.0);
+    float shadow_factor_mid = calculate_head_shadow(1000.0);
+    float shadow_factor_high = calculate_head_shadow(4000.0);
+    float shadow_factor = (shadow_factor_low * 0.3 + shadow_factor_mid * 0.4 + shadow_factor_high * 0.3);
+
+    // Torso and shoulder reflection effects
+    float torso_reflection = 1.0;
+    if (elevation < -0.2) {
+        torso_reflection = 1.0 + 0.15 * abs(elevation) * (1.0 - azimuth_abs / PI);
+    }
+
+    // Apply HRTF gains with enhanced modeling
+    float azimuth_factor = cos(azimuth * 0.5);
+    float elevation_factor = cos(elevation);
+
+    if (azimuth >= 0) {
+        // Source on the right side
+        right_gain *= (0.7 + 0.3 * azimuth_factor) * elevation_factor * shadow_factor * torso_reflection;
+        left_gain *= (0.3 + 0.2 * azimuth_factor) * elevation_factor * torso_reflection;
+    } else {
+        // Source on the left side
+        left_gain *= (0.7 + 0.3 * abs(azimuth_factor)) * elevation_factor * shadow_factor * torso_reflection;
+        right_gain *= (0.3 + 0.2 * abs(azimuth_factor)) * elevation_factor * torso_reflection;
+    }
+
+    // Calculate ILD in dB
+    ild_db = 20.0 * log(right_gain / max(left_gain, 0.001));
+
+    // Apply binaural enhancement
+    if (enable_binaural) {
+        float original_left = left_gain;
+        float original_right = right_gain;
+
+        left_gain = original_left + crossfeed * original_right;
+        right_gain = original_right + crossfeed * original_left;
+
+        float phase_enhancement = phase_shift * sin(azimuth);
+        left_gain *= (1.0 + phase_enhancement);
+        right_gain *= (1.0 - phase_enhancement);
+    }
+
+    // Distance-based high-frequency rolloff
+    if (distance > 1.0) {
+        float hf_rolloff = 1.0 / (1.0 + distance * 0.1);
+        left_gain *= hf_rolloff;
+        right_gain *= hf_rolloff;
+    }
+
+    // Clamp gains to valid range
+    left_gain = clamp(left_gain, 0.0, 2.0);
+    right_gain = clamp(right_gain, 0.0, 2.0);
+}
+
+void main() {
+    uint source_index = gl_GlobalInvocationID.x;
+
+    if (source_index >= params.source_count) {
+        return;
+    }
+
+    // Get source data
+    uint entity_id = audio_sources[source_index].entity_id;
+    vec3 source_pos = audio_sources[source_index].position.xyz;
+    float volume = audio_sources[source_index].volume;
+    bool is_playing = (audio_sources[source_index].is_playing != 0);
+    bool has_directional = (audio_sources[source_index].has_directional != 0);
+
+    if (!is_playing || params.listener_count == 0) {
+        // Initialize output for inactive sources
+        hrtf_outputs[source_index].left_gain = 0.0;
+        hrtf_outputs[source_index].right_gain = 0.0;
+        hrtf_outputs[source_index].itd_delay_samples = 0.0;
+        hrtf_outputs[source_index].ild_gain_db = 0.0;
+        hrtf_outputs[source_index].directivity_gain = 0.0;
+        hrtf_outputs[source_index].distance_attenuation = 0.0;
+        hrtf_outputs[source_index].entity_id = entity_id;
+        return;
+    }
+
+    // Use first active listener (could be enhanced for multiple listeners)
+    uint listener_index = 0;
+    vec3 listener_pos = listeners[listener_index].position.xyz;
+    vec3 listener_forward = listeners[listener_index].forward_direction.xyz;
+    vec3 listener_up = listeners[listener_index].up_direction.xyz;
+    vec3 listener_right = listeners[listener_index].right_direction.xyz;
+    float listener_gain = listeners[listener_index].gain;
+
+    vec3 to_listener = listener_pos - source_pos;
+    float distance = length(to_listener);
+
+    // Calculate base gains
+    float left_gain = volume * listener_gain * params.master_volume;
+    float right_gain = left_gain;
+
+    // Apply distance attenuation
+    float min_dist = audio_sources[source_index].min_distance;
+    float max_dist = audio_sources[source_index].max_distance;
+    float rolloff = audio_sources[source_index].rolloff_factor;
+
+    float distance_attenuation = 1.0;
+    if (distance > min_dist) {
+        if (distance < max_dist) {
+            distance_attenuation = min_dist / (min_dist + rolloff * (distance - min_dist));
+        } else {
+            distance_attenuation = min_dist / (min_dist + rolloff * (max_dist - min_dist));
+        }
+    }
+
+    left_gain *= distance_attenuation;
+    right_gain *= distance_attenuation;
+
+    // Calculate directivity gain if applicable
+    float directivity_gain = 1.0;
+    if (has_directional) {
+        // Find matching directional source
+        for (uint i = 0; i < params.directional_count; ++i) {
+            if (directional_sources[i].entity_id == entity_id) {
+                vec3 forward_dir = directional_sources[i].forward_direction.xyz;
+                directivity_gain = calculate_directivity_gain(
+                    directional_sources[i].directivity_pattern,
+                    forward_dir,
+                    to_listener,
+                    directional_sources[i].inner_cone_angle,
+                    directional_sources[i].outer_cone_angle,
+                    directional_sources[i].outer_cone_gain,
+                    directional_sources[i].directivity_sharpness,
+                    directional_sources[i].custom_response,
+                    directional_sources[i].custom_response_count
+                );
+
+                // Apply HRTF processing if enabled
+                if (directional_sources[i].enable_hrtf != 0) {
+                    float itd_samples, ild_db;
+                    apply_hrtf_processing(
+                        source_pos, listener_pos, listener_forward, listener_up, listener_right,
+                        directional_sources[i].head_radius,
+                        directional_sources[i].ear_distance,
+                        directional_sources[i].crossfeed_amount,
+                        directional_sources[i].phase_shift_amount,
+                        (directional_sources[i].enable_binaural != 0),
+                        left_gain, right_gain, itd_samples, ild_db
+                    );
+
+                    hrtf_outputs[source_index].itd_delay_samples = itd_samples;
+                    hrtf_outputs[source_index].ild_gain_db = ild_db;
+                } else {
+                    hrtf_outputs[source_index].itd_delay_samples = 0.0;
+                    hrtf_outputs[source_index].ild_gain_db = 0.0;
+                }
+                break;
+            }
+        }
+    } else {
+        // Basic stereo panning for non-directional sources
+        vec3 listener_to_source = normalize(to_listener);
+        float pan = dot(listener_to_source, listener_right);
+        left_gain *= (1.0 - pan) * 0.5 + 0.5;
+        right_gain *= (1.0 + pan) * 0.5 + 0.5;
+
+        hrtf_outputs[source_index].itd_delay_samples = 0.0;
+        hrtf_outputs[source_index].ild_gain_db = 0.0;
+    }
+
+    left_gain *= directivity_gain;
+    right_gain *= directivity_gain;
+
+    // Write output
+    hrtf_outputs[source_index].left_gain = left_gain;
+    hrtf_outputs[source_index].right_gain = right_gain;
+    hrtf_outputs[source_index].directivity_gain = directivity_gain;
+    hrtf_outputs[source_index].distance_attenuation = distance_attenuation;
+    hrtf_outputs[source_index].entity_id = entity_id;
+}

@@ -1,0 +1,490 @@
+cmake_minimum_required(VERSION 3.28)
+
+# Export compile commands for clangd/IDE support
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+# Set C++23 standard - use latest for proper C++23 support
+set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+# Force Visual Studio 2026 toolset
+set(CMAKE_GENERATOR_TOOLSET "v143")
+set(CMAKE_VS_PLATFORM_TOOLSET "v143")
+
+project(Lore VERSION 1.0.0 LANGUAGES CXX)
+
+# Force static linking for all libraries
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build shared libraries" FORCE)
+
+# CPM (CMake Package Manager) setup
+include(cmake/CPM.cmake)
+
+# Configure SUPER STRICT compiler flags for MSVC
+if(MSVC)
+    # Enable C++23 features with proper flag
+    add_compile_options(/std:c++latest)
+    add_compile_options(/permissive-)
+    add_compile_options(/Zc:__cplusplus)
+
+    # STRICT warnings and treat warnings as errors for our code
+    add_compile_options(/W4)         # Enable level 4 warnings (maximum for practical use)
+    add_compile_options(/WX)         # Treat warnings as errors
+    add_compile_options(/we4996)     # Treat deprecation warnings as errors
+    add_compile_options(/we4267)     # Treat size_t conversion warnings as errors
+    add_compile_options(/we4244)     # Treat type conversion warnings as errors
+    add_compile_options(/we4100)     # Treat unused parameter warnings as errors
+    add_compile_options(/we4101)     # Treat unused variable warnings as errors
+    add_compile_options(/we4189)     # Treat local variable initialized but not referenced as errors
+    add_compile_options(/we4018)     # Treat signed/unsigned mismatch as errors
+    add_compile_options(/we4389)     # Treat signed/unsigned comparison as errors
+    add_compile_options(/we4245)     # Treat signed/unsigned conversion as errors
+    add_compile_options(/we4706)     # Treat assignment within conditional as errors
+    add_compile_options(/we4715)     # Treat not all control paths return value as errors
+    add_compile_options(/we4701)     # Treat potentially uninitialized variable as errors
+    add_compile_options(/we4703)     # Treat potentially uninitialized pointer as errors
+
+    # Code quality warnings as errors
+    add_compile_options(/we4456)     # Declaration hides previous local declaration
+    add_compile_options(/we4457)     # Declaration hides function parameter
+    add_compile_options(/we4458)     # Declaration hides class member
+    add_compile_options(/we4459)     # Declaration hides global declaration
+    add_compile_options(/we4505)     # Unreferenced local function has been removed
+    add_compile_options(/we4702)     # Unreachable code
+    add_compile_options(/we4390)     # Empty controlled statement found
+
+    # Unicode support
+    add_compile_options(/utf-8)
+    add_compile_options(/DUNICODE)
+    add_compile_options(/D_UNICODE)
+
+    # Static linking flags
+    add_compile_options(/MT$<$<CONFIG:Debug>:d>)
+
+    # Performance optimizations for Release
+    add_compile_options($<$<CONFIG:Release>:/O2>)
+    add_compile_options($<$<CONFIG:Release>:/GL>)  # Whole program optimization
+    add_compile_options($<$<CONFIG:Release>:/DNDEBUG>)
+
+    # Debug optimizations
+    add_compile_options($<$<CONFIG:Debug>:/Od>)
+    add_compile_options($<$<CONFIG:Debug>:/Zi>)
+    add_compile_options($<$<CONFIG:Debug>:/RTC1>)
+    add_compile_options($<$<CONFIG:Debug>:/D_DEBUG>)
+
+    # Link time code generation for Release
+    set(CMAKE_EXE_LINKER_FLAGS_RELEASE "${CMAKE_EXE_LINKER_FLAGS_RELEASE} /LTCG")
+    set(CMAKE_STATIC_LINKER_FLAGS_RELEASE "${CMAKE_STATIC_LINKER_FLAGS_RELEASE} /LTCG")
+endif()
+
+# Function to disable warnings for third-party libraries
+function(target_disable_warnings target)
+    if(MSVC)
+        # Override all warning settings for third-party code
+        set_target_properties(${target} PROPERTIES
+            COMPILE_OPTIONS "/w"  # Disable ALL warnings completely
+        )
+        # Additional override to ensure no warnings are treated as errors
+        target_compile_definitions(${target} PRIVATE _CRT_SECURE_NO_WARNINGS)
+    endif()
+endfunction()
+
+# Function to disable third-party warnings when including external headers
+function(target_disable_external_warnings target)
+    if(MSVC)
+        # Disable specific warnings that come from external libraries
+        target_compile_options(${target} PRIVATE /wd4464)  # Relative include path contains '..'
+        target_compile_options(${target} PRIVATE /wd4005)  # Macro redefinition
+        target_compile_options(${target} PRIVATE /wd4820)  # Padding added to struct
+        target_compile_options(${target} PRIVATE /wd4625)  # Copy constructor implicitly deleted
+        target_compile_options(${target} PRIVATE /wd4626)  # Assignment operator implicitly deleted
+        target_compile_options(${target} PRIVATE /wd4250)  # Diamond inheritance issues
+        target_compile_options(${target} PRIVATE /wd4251)  # DLL interface issues
+        target_compile_options(${target} PRIVATE /wd4514)  # Unreferenced inline function removed
+    endif()
+endfunction()
+
+# Find Vulkan (required)
+find_package(Vulkan REQUIRED)
+
+# Add dependencies via CPM
+CPMAddPackage(
+    NAME glfw
+    GITHUB_REPOSITORY glfw/glfw
+    GIT_TAG 3.4
+    OPTIONS
+        "GLFW_BUILD_EXAMPLES OFF"
+        "GLFW_BUILD_TESTS OFF"
+        "GLFW_BUILD_DOCS OFF"
+        "GLFW_INSTALL OFF"
+        "GLFW_USE_HYBRID_HPG ON"
+)
+
+# VkBootstrap for easy Vulkan setup
+CPMAddPackage(
+    NAME vk-bootstrap
+    GITHUB_REPOSITORY charles-lunarg/vk-bootstrap
+    GIT_TAG v1.3.283
+)
+
+# GLM for mathematics
+CPMAddPackage(
+    NAME glm
+    GITHUB_REPOSITORY g-truc/glm
+    GIT_TAG 1.0.1
+    OPTIONS
+        "GLM_ENABLE_CXX_23 ON"
+        "BUILD_SHARED_LIBS OFF"
+        "GLM_DISABLE_AUTO_DETECTION ON"
+)
+
+# Disable GLM SIMD to avoid conflicts with our custom SIMD
+if(TARGET glm)
+    target_compile_definitions(glm INTERFACE GLM_FORCE_PURE)
+    target_compile_definitions(glm INTERFACE GLM_FORCE_MESSAGES)
+endif()
+
+# miniaudio for audio
+CPMAddPackage(
+    NAME miniaudio
+    GITHUB_REPOSITORY mackron/miniaudio
+    GIT_TAG 0.11.21
+    DOWNLOAD_ONLY YES
+)
+
+if(miniaudio_ADDED)
+    add_library(miniaudio INTERFACE)
+    target_include_directories(miniaudio INTERFACE ${miniaudio_SOURCE_DIR})
+endif()
+
+# stb_image for image loading
+CPMAddPackage(
+    NAME stb
+    GITHUB_REPOSITORY nothings/stb
+    GIT_TAG master
+    DOWNLOAD_ONLY YES
+)
+
+if(stb_ADDED)
+    add_library(stb_image INTERFACE)
+    target_include_directories(stb_image INTERFACE ${stb_SOURCE_DIR})
+    target_compile_definitions(stb_image INTERFACE
+        STBI_ONLY_PNG
+        STBI_ONLY_JPEG
+        STBI_ONLY_BMP
+        STBI_ONLY_TGA
+        STBI_ONLY_HDR
+    )
+endif()
+
+# nlohmann/json for JSON asset files
+CPMAddPackage(
+    NAME nlohmann_json
+    GITHUB_REPOSITORY nlohmann/json
+    GIT_TAG v3.11.3
+    OPTIONS
+        "JSON_BuildTests OFF"
+        "JSON_Install OFF"
+)
+
+# VMA for Vulkan memory allocation
+CPMAddPackage(
+    NAME VulkanMemoryAllocator
+    GITHUB_REPOSITORY GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator
+    GIT_TAG v3.1.0
+    DOWNLOAD_ONLY YES
+)
+
+if(VulkanMemoryAllocator_ADDED)
+    add_library(VulkanMemoryAllocator INTERFACE)
+    target_include_directories(VulkanMemoryAllocator INTERFACE ${VulkanMemoryAllocator_SOURCE_DIR}/include)
+endif()
+
+# SPIRV-Reflect for shader reflection in GPU compute system (lightweight alternative)
+CPMAddPackage(
+    NAME spirv-reflect
+    GITHUB_REPOSITORY KhronosGroup/SPIRV-Reflect
+    GIT_TAG vulkan-sdk-1.3.283.0
+    DOWNLOAD_ONLY YES
+)
+
+if(spirv-reflect_ADDED)
+    add_library(spirv-reflect STATIC ${spirv-reflect_SOURCE_DIR}/spirv_reflect.c)
+    target_include_directories(spirv-reflect PUBLIC ${spirv-reflect_SOURCE_DIR})
+    target_compile_definitions(spirv-reflect PRIVATE SPIRV_REFLECT_STATIC_DEFINE)
+endif()
+
+# glslang for GLSL to SPIR-V compilation (provides glslangValidator)
+CPMAddPackage(
+    NAME glslang
+    GITHUB_REPOSITORY KhronosGroup/glslang
+    GIT_TAG vulkan-sdk-1.3.283.0
+    OPTIONS
+        "ENABLE_SPVREMAPPER OFF"
+        "ENABLE_GLSLANG_BINARIES ON"
+        "ENABLE_GLSLANG_JS OFF"
+        "ENABLE_RTTI OFF"
+        "ENABLE_EXCEPTIONS OFF"
+        "ENABLE_CTEST OFF"
+        "ENABLE_OPT OFF"
+        "BUILD_EXTERNAL OFF"
+        "SKIP_GLSLANG_INSTALL ON"
+)
+
+
+# Apply aggressive warning suppressions to glslang targets after they're created
+if(glslang_ADDED)
+    # Use a CMake function to delay target modification until after targets are fully created
+    function(suppress_glslang_warnings)
+        set(GLSLANG_TARGETS
+            glslang
+            glslang-standalone
+            SPIRV
+            OGLCompiler
+            OSDependent
+            MachineIndependent
+            GenericCodeGen
+            glslang-default-resource-limits
+        )
+
+        foreach(target ${GLSLANG_TARGETS})
+            if(TARGET ${target})
+                if(MSVC)
+                    # Remove existing compile options that might interfere
+                    get_target_property(EXISTING_OPTIONS ${target} COMPILE_OPTIONS)
+                    if(EXISTING_OPTIONS)
+                        set_target_properties(${target} PROPERTIES COMPILE_OPTIONS "")
+                    endif()
+
+                    # Apply our warning suppression
+                    target_compile_options(${target} PRIVATE /w)
+                    target_compile_definitions(${target} PRIVATE
+                        _CRT_SECURE_NO_WARNINGS
+                        _SCL_SECURE_NO_WARNINGS
+                    )
+                endif()
+            endif()
+        endforeach()
+    endfunction()
+
+    # Call the function to apply suppressions
+    suppress_glslang_warnings()
+endif()
+
+# Disable policy warnings
+if(POLICY CMP0077)
+    cmake_policy(SET CMP0077 NEW)
+endif()
+if(POLICY CMP0135)
+    cmake_policy(SET CMP0135 NEW)
+endif()
+if(POLICY CMP0144)
+    cmake_policy(SET CMP0144 NEW)
+endif()
+if(POLICY CMP0169)
+    cmake_policy(SET CMP0169 OLD)
+endif()
+
+# Configure ccache if available for build efficiency
+find_program(CCACHE_PROGRAM ccache)
+if(CCACHE_PROGRAM)
+    message(STATUS "Found ccache: ${CCACHE_PROGRAM}")
+    set(CMAKE_CXX_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
+    set(CMAKE_C_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
+endif()
+
+# Disable warnings for all third-party libraries
+if(TARGET glfw)
+    target_disable_warnings(glfw)
+endif()
+if(TARGET vk-bootstrap)
+    target_disable_warnings(vk-bootstrap)
+endif()
+if(TARGET glm)
+    target_disable_warnings(glm)
+endif()
+if(TARGET spirv-reflect)
+    target_disable_warnings(spirv-reflect)
+endif()
+
+# Include directories
+include_directories(
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+# Core engine libraries
+add_subdirectory(src/ecs)
+add_subdirectory(src/math)
+add_subdirectory(src/physics)
+add_subdirectory(src/audio)
+add_subdirectory(src/input)
+add_subdirectory(src/assets)
+add_subdirectory(src/graphics)
+
+# Main executable
+add_executable(lore src/main.cpp)
+
+# GPU Compute Test executable
+add_executable(test_gpu_compute src/test_gpu_compute.cpp)
+
+# GPU Compute Demo executable
+add_executable(gpu_compute_demo src/gpu_compute_demo.cpp)
+
+# Link libraries in proper dependency order
+target_link_libraries(lore PRIVATE
+    lore_graphics    # Graphics system (depends on other systems)
+    lore_assets      # Asset system (depends on ECS and Math)
+    lore_audio       # Audio system (depends on ECS and Math)
+    lore_physics     # Physics system (depends on ECS and Math)
+    lore_input       # Input system (depends on GLFW)
+    lore_math        # Math system (depends on GLM)
+    lore_ecs         # ECS system (base dependency)
+    glfw
+    Vulkan::Vulkan
+    vk-bootstrap::vk-bootstrap
+    VulkanMemoryAllocator
+    glm::glm
+    stb_image
+    miniaudio
+    spirv-reflect
+)
+
+# Link libraries for GPU Compute Test
+target_link_libraries(test_gpu_compute PRIVATE
+    lore_graphics
+    glm::glm
+    Vulkan::Vulkan
+    VulkanMemoryAllocator
+    spirv-reflect
+)
+
+# Link libraries for GPU Compute Demo
+target_link_libraries(gpu_compute_demo PRIVATE
+    lore_graphics
+    glfw
+    Vulkan::Vulkan
+    vk-bootstrap::vk-bootstrap
+    VulkanMemoryAllocator
+    glm::glm
+    spirv-reflect
+)
+
+# Ensure static linking for all executables
+set_target_properties(lore PROPERTIES
+    MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
+)
+
+set_target_properties(test_gpu_compute PROPERTIES
+    MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
+)
+
+set_target_properties(gpu_compute_demo PROPERTIES
+    MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>"
+)
+
+# Disable third-party warnings for our targets that use external libraries
+target_disable_external_warnings(lore_math)
+target_disable_external_warnings(lore_ecs)
+target_disable_external_warnings(lore_input)
+target_disable_external_warnings(lore_assets)
+target_disable_external_warnings(lore_graphics)
+target_disable_external_warnings(lore)
+target_disable_external_warnings(test_gpu_compute)
+target_disable_external_warnings(gpu_compute_demo)
+
+# Function to compile GLSL shaders to SPIR-V using glslangValidator from CPM
+function(compile_shader SHADER_SOURCE SHADER_OUTPUT)
+    get_filename_component(SHADER_NAME ${SHADER_SOURCE} NAME)
+
+    # Use glslangValidator from glslang build if available, otherwise fall back to system
+    if(TARGET glslang-standalone)
+        set(GLSLANG_VALIDATOR $<TARGET_FILE:glslang-standalone>)
+        set(GLSLANG_DEPENDENCY glslang-standalone)
+    elseif(TARGET glslangValidator)
+        set(GLSLANG_VALIDATOR $<TARGET_FILE:glslangValidator>)
+        set(GLSLANG_DEPENDENCY glslangValidator)
+    else()
+        # Fall back to system glslangValidator
+        find_program(GLSLANG_VALIDATOR glslangValidator REQUIRED)
+        set(GLSLANG_DEPENDENCY "")
+    endif()
+
+    add_custom_command(
+        OUTPUT ${SHADER_OUTPUT}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/shaders/compiled
+        COMMAND ${GLSLANG_VALIDATOR} -V ${SHADER_SOURCE} -o ${SHADER_OUTPUT}
+        DEPENDS ${SHADER_SOURCE} ${GLSLANG_DEPENDENCY}
+        COMMENT "Compiling ${SHADER_NAME} to SPIR-V using glslangValidator"
+        VERBATIM
+    )
+endfunction()
+
+# Create shader directories
+file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/shaders/compiled)
+
+# Compile individual graphics shaders
+set(VERTEX_SHADER_SPV ${CMAKE_BINARY_DIR}/shaders/compiled/triangle_vert.spv)
+set(FRAGMENT_SHADER_SPV ${CMAKE_BINARY_DIR}/shaders/compiled/triangle_frag.spv)
+
+compile_shader(${CMAKE_SOURCE_DIR}/shaders/triangle.vert ${VERTEX_SHADER_SPV})
+compile_shader(${CMAKE_SOURCE_DIR}/shaders/triangle.frag ${FRAGMENT_SHADER_SPV})
+
+# Compile GPU compute shaders
+set(GPU_ARENA_ALLOCATOR_SPV ${CMAKE_BINARY_DIR}/shaders/compiled/gpu_arena_allocator.spv)
+set(GPU_ARENA_DEALLOCATOR_SPV ${CMAKE_BINARY_DIR}/shaders/compiled/gpu_arena_deallocator.spv)
+set(GPU_PHYSICS_INTEGRATION_SPV ${CMAKE_BINARY_DIR}/shaders/compiled/gpu_physics_integration.spv)
+set(GPU_PARTICLE_UPDATE_SPV ${CMAKE_BINARY_DIR}/shaders/compiled/gpu_particle_update.spv)
+set(GPU_ECS_TRANSFORM_SPV ${CMAKE_BINARY_DIR}/shaders/compiled/gpu_ecs_transform.spv)
+
+compile_shader(${CMAKE_SOURCE_DIR}/shaders/compute/gpu_arena_allocator.comp ${GPU_ARENA_ALLOCATOR_SPV})
+compile_shader(${CMAKE_SOURCE_DIR}/shaders/compute/gpu_arena_deallocator.comp ${GPU_ARENA_DEALLOCATOR_SPV})
+compile_shader(${CMAKE_SOURCE_DIR}/shaders/compute/gpu_physics_integration.comp ${GPU_PHYSICS_INTEGRATION_SPV})
+compile_shader(${CMAKE_SOURCE_DIR}/shaders/compute/gpu_particle_update.comp ${GPU_PARTICLE_UPDATE_SPV})
+compile_shader(${CMAKE_SOURCE_DIR}/shaders/compute/gpu_ecs_transform.comp ${GPU_ECS_TRANSFORM_SPV})
+
+# Create target for all compiled shaders
+add_custom_target(compile_shaders ALL
+    DEPENDS
+        ${VERTEX_SHADER_SPV}
+        ${FRAGMENT_SHADER_SPV}
+        ${GPU_ARENA_ALLOCATOR_SPV}
+        ${GPU_ARENA_DEALLOCATOR_SPV}
+        ${GPU_PHYSICS_INTEGRATION_SPV}
+        ${GPU_PARTICLE_UPDATE_SPV}
+        ${GPU_ECS_TRANSFORM_SPV}
+    COMMENT "Building all shaders"
+)
+
+# Copy shaders to executable directory after compilation
+add_custom_command(TARGET lore POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:lore>/shaders/compiled
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${VERTEX_SHADER_SPV} $<TARGET_FILE_DIR:lore>/shaders/compiled/
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${FRAGMENT_SHADER_SPV} $<TARGET_FILE_DIR:lore>/shaders/compiled/
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${GPU_ARENA_ALLOCATOR_SPV} $<TARGET_FILE_DIR:lore>/shaders/compiled/
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${GPU_ARENA_DEALLOCATOR_SPV} $<TARGET_FILE_DIR:lore>/shaders/compiled/
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${GPU_PHYSICS_INTEGRATION_SPV} $<TARGET_FILE_DIR:lore>/shaders/compiled/
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${GPU_PARTICLE_UPDATE_SPV} $<TARGET_FILE_DIR:lore>/shaders/compiled/
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${GPU_ECS_TRANSFORM_SPV} $<TARGET_FILE_DIR:lore>/shaders/compiled/
+    COMMENT "Copying compiled shaders to executable directory"
+)
+
+# Copy assets to executable directory after compilation
+add_custom_command(TARGET lore POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/assets $<TARGET_FILE_DIR:lore>/assets
+    COMMENT "Copying assets to executable directory"
+)
+
+# Make main executable depend on shader compilation
+add_dependencies(lore compile_shaders)
+
+
+# Manual target to copy compile_commands.json to project root for IDE support
+# Run this manually with: cmake --build build --target copy_compile_commands
+add_custom_target(copy_compile_commands
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_BINARY_DIR}/compile_commands.json ${CMAKE_SOURCE_DIR}/compile_commands.json
+    COMMENT "Copying compile_commands.json to project root for IDE support"
+    VERBATIM
+)
+

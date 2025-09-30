@@ -1,0 +1,53 @@
+# Ripgrep configuration for Lore C++ project
+# This file configures ripgrep to search only project-relevant files by default
+
+# File types to include (C/C++ project specific)
+--type-add=cpp:*.{cpp,cxx,cc,c++,C}
+--type-add=c:*.{c,h}
+--type-add=headers:*.{h,hpp,hxx,hh,h++,H}
+--type-add=cmake:*.{cmake,CMakeLists.txt}
+--type-add=glsl:*.{vert,frag,comp,glsl,hlsl}
+--type-add=config:*.{json,toml,yaml,yml,ini,cfg,conf}
+--type-add=docs:*.{md,txt,rst}
+--type-add=scripts:*.{sh,bat,ps1,py}
+
+# Search these file types by default
+--type=cpp
+--type=c
+--type=headers
+--type=cmake
+--type=glsl
+--type=config
+--type=docs
+--type=scripts
+
+# Exclude common build/cache directories
+--glob=!build/**
+--glob=!_deps/**
+--glob=!.vs/**
+--glob=!.vscode/**
+--glob=!.git/**
+--glob=!*.tmp
+--glob=!*.cache
+--glob=!*.log
+--glob=!*.obj
+--glob=!*.lib
+--glob=!*.exe
+--glob=!*.dll
+--glob=!*.pdb
+--glob=!*.ilk
+--glob=!*.spv
+
+# Performance optimizations
+--max-columns=300
+--max-filesize=1M
+
+# Display options
+--line-number
+--column
+--color=always
+--heading
+--smart-case
+
+# Follow symbolic links
+--follow

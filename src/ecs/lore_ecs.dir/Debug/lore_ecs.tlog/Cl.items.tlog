@@ -1,0 +1,6 @@
+G:\repos\lore\src\ecs\ecs.cpp;G:\repos\lore\src\ecs\lore_ecs.dir\Debug\ecs.obj
+G:\repos\lore\src\ecs\entity_manager.cpp;G:\repos\lore\src\ecs\lore_ecs.dir\Debug\entity_manager.obj
+G:\repos\lore\src\ecs\world_manager.cpp;G:\repos\lore\src\ecs\lore_ecs.dir\Debug\world_manager.obj
+G:\repos\lore\src\ecs\component_tracking.cpp;G:\repos\lore\src\ecs\lore_ecs.dir\Debug\component_tracking.obj
+G:\repos\lore\src\ecs\serialization.cpp;G:\repos\lore\src\ecs\lore_ecs.dir\Debug\serialization.obj
+G:\repos\lore\src\ecs\advanced_ecs.cpp;G:\repos\lore\src\ecs\lore_ecs.dir\Debug\advanced_ecs.obj

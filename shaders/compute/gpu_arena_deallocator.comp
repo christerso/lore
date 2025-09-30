@@ -1,0 +1,152 @@
+#version 450
+
+// GPU Arena Deallocator Compute Shader
+// Handles memory deallocation and free list management entirely on GPU
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+struct ArenaMetadata {
+    uint next_offset;
+    uint total_size;
+    uint free_list_head;
+    uint allocation_count;
+    uint arena_id;
+    uint padding[3];
+};
+
+struct DeallocationRequest {
+    uint offset;            // Offset to deallocate
+    uint size;              // Size of allocation
+    uint arena_id;          // Target arena
+    uint success;           // Written by GPU
+    uint padding[4];
+};
+
+struct FreeBlock {
+    uint offset;
+    uint size;
+    uint next_block;
+    uint padding;
+};
+
+layout(set = 0, binding = 0, std430) restrict buffer ArenaMetadataBuffer {
+    ArenaMetadata arena_metadata[];
+};
+
+layout(set = 0, binding = 1, std430) restrict buffer DeallocationRequestBuffer {
+    DeallocationRequest deallocation_requests[];
+};
+
+layout(set = 0, binding = 2, std430) restrict buffer FreeListBuffer {
+    FreeBlock free_blocks[];
+};
+
+layout(push_constant) uniform PushConstants {
+    uint num_requests;
+    uint frame_index;
+    uint padding[2];
+} push_constants;
+
+uint find_arena_index(uint arena_id) {
+    for (uint i = 0; i < arena_metadata.length(); ++i) {
+        if (arena_metadata[i].arena_id == arena_id) {
+            return i;
+        }
+    }
+    return 0xFFFFFFFF;
+}
+
+void coalesce_free_blocks(uint arena_idx, uint new_block_idx) {
+    FreeBlock new_block = free_blocks[new_block_idx];
+    uint current_idx = arena_metadata[arena_idx].free_list_head;
+    uint prev_idx = 0;
+
+    // Find insertion point to maintain sorted order by offset
+    while (current_idx != 0 && current_idx < free_blocks.length()) {
+        FreeBlock current_block = free_blocks[current_idx];
+
+        if (current_block.offset > new_block.offset) {
+            break;
+        }
+
+        // Check if we can coalesce with previous block
+        if (prev_idx != 0) {
+            FreeBlock prev_block = free_blocks[prev_idx];
+            if (prev_block.offset + prev_block.size == new_block.offset) {
+                // Coalesce with previous block
+                free_blocks[prev_idx].size += new_block.size;
+                new_block_idx = prev_idx;
+                new_block = free_blocks[new_block_idx];
+            }
+        }
+
+        prev_idx = current_idx;
+        current_idx = current_block.next_block;
+    }
+
+    // Check if we can coalesce with next block
+    if (current_idx != 0 && current_idx < free_blocks.length()) {
+        FreeBlock next_block = free_blocks[current_idx];
+        if (new_block.offset + new_block.size == next_block.offset) {
+            // Coalesce with next block
+            free_blocks[new_block_idx].size += next_block.size;
+            free_blocks[new_block_idx].next_block = next_block.next_block;
+
+            // Remove the coalesced block
+            if (prev_idx != 0) {
+                free_blocks[prev_idx].next_block = new_block_idx;
+            } else {
+                arena_metadata[arena_idx].free_list_head = new_block_idx;
+            }
+            return;
+        }
+    }
+
+    // Insert into free list
+    free_blocks[new_block_idx].next_block = current_idx;
+    if (prev_idx != 0) {
+        free_blocks[prev_idx].next_block = new_block_idx;
+    } else {
+        arena_metadata[arena_idx].free_list_head = new_block_idx;
+    }
+}
+
+void main() {
+    uint request_idx = gl_GlobalInvocationID.x;
+
+    if (request_idx >= push_constants.num_requests || request_idx >= deallocation_requests.length()) {
+        return;
+    }
+
+    DeallocationRequest request = deallocation_requests[request_idx];
+    uint arena_idx = find_arena_index(request.arena_id);
+
+    if (arena_idx == 0xFFFFFFFF) {
+        deallocation_requests[request_idx].success = 0;
+        return;
+    }
+
+    // Find free slot in free_blocks array
+    uint free_block_idx = 0xFFFFFFFF;
+    for (uint i = 1; i < free_blocks.length(); ++i) { // Skip index 0 (reserved for null)
+        if (free_blocks[i].size == 0) {
+            free_block_idx = i;
+            break;
+        }
+    }
+
+    if (free_block_idx == 0xFFFFFFFF) {
+        deallocation_requests[request_idx].success = 0;
+        return;
+    }
+
+    // Create new free block
+    free_blocks[free_block_idx].offset = request.offset;
+    free_blocks[free_block_idx].size = request.size;
+    free_blocks[free_block_idx].next_block = 0;
+
+    // Coalesce with adjacent blocks
+    coalesce_free_blocks(arena_idx, free_block_idx);
+
+    atomicAdd(arena_metadata[arena_idx].allocation_count, -1);
+    deallocation_requests[request_idx].success = 1;
+}

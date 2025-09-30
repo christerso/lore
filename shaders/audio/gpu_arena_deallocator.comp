@@ -1,0 +1,190 @@
+#version 450
+
+// GPU Arena Deallocator Compute Shader
+// Provides autonomous GPU memory deallocation and compaction
+
+layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+
+// Arena metadata buffer
+layout(std140, binding = 0) buffer ArenaMetadataBuffer {
+    uint next_offset;
+    uint total_size;
+    uint free_list_head;
+    uint allocation_count;
+    uint arena_id;
+    uint padding[3];
+} arena_metadata[];
+
+// Deallocation request buffer
+layout(std140, binding = 1) buffer DeallocationRequestBuffer {
+    uint offset;
+    uint size;
+    uint arena_id;
+    uint success;
+    uint padding[4];
+} deallocation_requests[];
+
+// Free list buffer for deallocated blocks
+layout(std140, binding = 2) buffer FreeListBuffer {
+    uint next_free;
+    uint size;
+    uint padding[2];
+} free_list[];
+
+// Compaction buffer for memory defragmentation
+layout(std140, binding = 3) buffer CompactionBuffer {
+    uint source_offset;
+    uint dest_offset;
+    uint size;
+    uint completed;
+} compaction_operations[];
+
+// Push constants
+layout(push_constant) uniform PushConstants {
+    uint request_count;
+    uint max_arenas;
+    uint enable_compaction;
+    uint compaction_threshold_percent;
+    uint max_compaction_operations;
+    uint padding[3];
+} params;
+
+// Coalesce adjacent free blocks
+void coalesce_free_blocks(uint arena_idx) {
+    // Simple coalescing algorithm
+    // In a full implementation, this would be more sophisticated
+
+    uint current_free = arena_metadata[arena_idx].free_list_head;
+
+    while (current_free != 0xFFFFFFFF) {
+        uint next_free = free_list[current_free].next_free;
+        uint current_size = free_list[current_free].size;
+
+        // Check if next block is adjacent
+        if (next_free != 0xFFFFFFFF) {
+            uint expected_next_offset = current_free + (current_size / 8); // Assuming 8-byte units
+
+            if (expected_next_offset == next_free) {
+                // Coalesce blocks
+                free_list[current_free].size += free_list[next_free].size;
+                free_list[current_free].next_free = free_list[next_free].next_free;
+
+                // Mark next block as invalid
+                free_list[next_free].next_free = 0xFFFFFFFF;
+                free_list[next_free].size = 0;
+
+                continue; // Check for more coalescing
+            }
+        }
+
+        current_free = next_free;
+    }
+}
+
+// Calculate fragmentation ratio
+float calculate_fragmentation(uint arena_idx) {
+    uint total_free_space = 0;
+    uint largest_free_block = 0;
+    uint free_block_count = 0;
+
+    uint current_free = arena_metadata[arena_idx].free_list_head;
+
+    while (current_free != 0xFFFFFFFF) {
+        uint block_size = free_list[current_free].size;
+        total_free_space += block_size;
+        largest_free_block = max(largest_free_block, block_size);
+        free_block_count++;
+
+        current_free = free_list[current_free].next_free;
+    }
+
+    if (total_free_space == 0) {
+        return 0.0; // No fragmentation if no free space
+    }
+
+    // Fragmentation = 1 - (largest_free_block / total_free_space)
+    return 1.0 - (float(largest_free_block) / float(total_free_space));
+}
+
+// Determine if compaction is needed
+bool needs_compaction(uint arena_idx) {
+    if (params.enable_compaction == 0) {
+        return false;
+    }
+
+    float fragmentation = calculate_fragmentation(arena_idx);
+    float threshold = float(params.compaction_threshold_percent) / 100.0;
+
+    return fragmentation > threshold;
+}
+
+// Add a block to the free list
+void add_to_free_list(uint arena_idx, uint offset, uint size) {
+    uint block_idx = offset / 8; // Convert to block index
+
+    // Initialize the free block
+    free_list[block_idx].size = size;
+
+    // Insert at head of free list (LIFO for simplicity)
+    uint old_head = atomicExchange(arena_metadata[arena_idx].free_list_head, block_idx);
+    free_list[block_idx].next_free = old_head;
+}
+
+void main() {
+    uint request_idx = gl_GlobalInvocationID.x;
+
+    if (request_idx >= params.request_count) {
+        return;
+    }
+
+    uint arena_id = deallocation_requests[request_idx].arena_id;
+    uint offset = deallocation_requests[request_idx].offset;
+    uint size = deallocation_requests[request_idx].size;
+
+    // Find arena
+    uint arena_idx = 0xFFFFFFFF;
+    for (uint i = 0; i < params.max_arenas; ++i) {
+        if (arena_metadata[i].arena_id == arena_id) {
+            arena_idx = i;
+            break;
+        }
+    }
+
+    if (arena_idx == 0xFFFFFFFF) {
+        // Arena not found
+        deallocation_requests[request_idx].success = 0;
+        return;
+    }
+
+    // Validate deallocation request
+    if (offset >= arena_metadata[arena_idx].total_size ||
+        offset + size > arena_metadata[arena_idx].total_size) {
+        deallocation_requests[request_idx].success = 0;
+        return;
+    }
+
+    // Add block to free list
+    add_to_free_list(arena_idx, offset, size);
+
+    // Decrement allocation count
+    atomicAdd(arena_metadata[arena_idx].allocation_count, -1);
+
+    // Coalesce adjacent free blocks
+    coalesce_free_blocks(arena_idx);
+
+    // Check if compaction is needed
+    if (needs_compaction(arena_idx)) {
+        // Trigger compaction (simplified - full implementation would be more complex)
+        // This would schedule compaction operations for a separate compute pass
+
+        uint compaction_idx = atomicAdd(params.max_compaction_operations, 1);
+        if (compaction_idx < params.max_compaction_operations) {
+            compaction_operations[compaction_idx].source_offset = offset;
+            compaction_operations[compaction_idx].dest_offset = 0; // To be determined
+            compaction_operations[compaction_idx].size = size;
+            compaction_operations[compaction_idx].completed = 0;
+        }
+    }
+
+    deallocation_requests[request_idx].success = 1;
+}

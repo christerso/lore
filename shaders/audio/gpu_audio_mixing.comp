@@ -1,0 +1,291 @@
+#version 450
+
+// GPU Audio Mixing Compute Shader
+// Final audio mixing with environmental effects and real-time performance monitoring
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+// HRTF processing results
+layout(std140, binding = 0) readonly buffer HRTFOutputBuffer {
+    float left_gain;
+    float right_gain;
+    float itd_delay_samples;
+    float ild_gain_db;
+    float directivity_gain;
+    float distance_attenuation;
+    uint entity_id;
+    uint padding[1];
+} hrtf_outputs[];
+
+// Environmental audio parameters
+layout(std140, binding = 1) readonly buffer EnvironmentalBuffer {
+    float room_size;
+    float absorption_coefficient;
+    float reflection_coefficient;
+    float reverb_delay_ms;
+    float reverb_decay_time;
+    float air_absorption_factor;
+    float temperature_celsius;
+    float humidity_percent;
+    uint padding[8];
+} environmental_params;
+
+// Final mixed audio output buffer
+layout(std140, binding = 2) writeonly buffer AudioOutputBuffer {
+    float left_samples[4096];   // 4K samples for low latency
+    float right_samples[4096];
+    uint sample_count;
+    float peak_level_left;
+    float peak_level_right;
+    float rms_level_left;
+    float rms_level_right;
+    uint padding[2];
+} audio_output;
+
+// Performance statistics buffer
+layout(std140, binding = 3) buffer PerformanceStatsBuffer {
+    uint sources_processed;
+    uint hrtf_convolutions_completed;
+    uint directivity_calculations;
+    uint mixing_operations;
+    float gpu_utilization_percent;
+    uint memory_used_bytes;
+    uint compute_time_microseconds;
+    uint frame_number;
+    float cpu_gpu_sync_time_ms;
+    uint buffer_underruns;
+    uint buffer_overruns;
+    uint padding[5];
+} perf_stats;
+
+// Push constants for frame parameters
+layout(push_constant) uniform PushConstants {
+    float delta_time;
+    float current_time;
+    float sound_speed;
+    float doppler_factor;
+    float master_volume;
+    uint source_count;
+    uint directional_count;
+    uint listener_count;
+    float environmental_room_size;
+    float environmental_absorption;
+    uint enable_environmental_effects;
+    uint enable_performance_monitoring;
+} params;
+
+// Reverb delay line (simplified)
+shared float reverb_delay_line[1024];
+shared uint reverb_write_pos;
+
+// Environmental audio processing
+vec2 apply_environmental_effects(vec2 audio_sample, float room_size, float absorption,
+                                float source_distance, float reverb_time) {
+    // Air absorption at various frequencies
+    float air_absorption = 1.0 - (source_distance * 0.0001 * environmental_params.air_absorption_factor);
+    air_absorption = clamp(air_absorption, 0.1, 1.0);
+
+    // Apply air absorption
+    audio_sample *= air_absorption;
+
+    // Simple reverb calculation
+    float reverb_factor = (1.0 - absorption) * (room_size / 100.0);
+    reverb_factor = clamp(reverb_factor, 0.0, 0.7);
+
+    if (reverb_factor > 0.01) {
+        // Add reverb with decay
+        float decay = exp(-params.delta_time / reverb_time);
+        vec2 reverb_sample = audio_sample * reverb_factor * decay;
+
+        // Simulate reverb delay (simplified)
+        uint delay_samples = uint(environmental_params.reverb_delay_ms * 48.0); // 48kHz
+        delay_samples = min(delay_samples, 1023);
+
+        if (gl_LocalInvocationID.x == 0) {
+            reverb_write_pos = (reverb_write_pos + 1) % 1024;
+        }
+        barrier();
+
+        float delayed_reverb = reverb_delay_line[(reverb_write_pos + 1024 - delay_samples) % 1024];
+        reverb_delay_line[reverb_write_pos] = (audio_sample.x + audio_sample.y) * 0.5;
+
+        audio_sample += vec2(delayed_reverb) * reverb_factor;
+    }
+
+    return audio_sample;
+}
+
+// Real-time performance monitoring
+void update_performance_stats(uint sources_processed, float processing_time) {
+    if (params.enable_performance_monitoring == 0) {
+        return;
+    }
+
+    // Atomic updates for thread safety
+    atomicAdd(perf_stats.sources_processed, sources_processed);
+    atomicAdd(perf_stats.mixing_operations, 1);
+
+    // GPU utilization estimation (simplified)
+    float utilization = min(processing_time / (params.delta_time * 1000.0), 1.0) * 100.0;
+    perf_stats.gpu_utilization_percent = utilization;
+
+    // Memory usage tracking
+    uint memory_per_source = 256; // Estimated bytes per audio source
+    perf_stats.memory_used_bytes = params.source_count * memory_per_source;
+}
+
+// Advanced audio sample interpolation for ITD delays
+vec2 interpolate_audio_sample(float delay_samples, vec2 current_sample, vec2 previous_sample) {
+    if (delay_samples < 0.1) {
+        return current_sample;
+    }
+
+    float fractional_delay = fract(delay_samples);
+    float integer_delay = floor(delay_samples);
+
+    // Linear interpolation for fractional delays
+    vec2 interpolated = mix(previous_sample, current_sample, fractional_delay);
+
+    return interpolated;
+}
+
+// Frequency-dependent directivity response
+float calculate_frequency_response(uint directivity_pattern, float frequency_hz) {
+    const float FREQ_LOW = 250.0;
+    const float FREQ_MID = 1000.0;
+    const float FREQ_HIGH = 4000.0;
+
+    float normalized_freq = clamp(frequency_hz / 20000.0, 0.0, 1.0);
+
+    switch (directivity_pattern) {
+        case 1: // CARDIOID
+            return 0.9 + 0.1 * (1.0 - normalized_freq);
+
+        case 5: // SHOTGUN
+            return 0.8 + 0.2 * normalized_freq;
+
+        case 4: // BIDIRECTIONAL
+            return 0.85 + 0.15 * sin(normalized_freq * 3.14159);
+
+        default:
+            return 1.0;
+    }
+}
+
+void main() {
+    uint sample_idx = gl_GlobalInvocationID.x;
+    const uint SAMPLES_PER_FRAME = 4096;
+
+    if (sample_idx >= SAMPLES_PER_FRAME) {
+        return;
+    }
+
+    // Initialize shared memory for reverb
+    if (gl_LocalInvocationID.x == 0) {
+        reverb_write_pos = 0;
+    }
+
+    if (gl_LocalInvocationID.x < 1024) {
+        reverb_delay_line[gl_LocalInvocationID.x] = 0.0;
+    }
+    barrier();
+
+    vec2 mixed_sample = vec2(0.0);
+    float processing_start_time = params.current_time;
+
+    // Mix all audio sources
+    for (uint source_idx = 0; source_idx < params.source_count; ++source_idx) {
+        float left_gain = hrtf_outputs[source_idx].left_gain;
+        float right_gain = hrtf_outputs[source_idx].right_gain;
+        float itd_delay = hrtf_outputs[source_idx].itd_delay_samples;
+        float directivity_gain = hrtf_outputs[source_idx].directivity_gain;
+        float distance_attenuation = hrtf_outputs[source_idx].distance_attenuation;
+
+        if (left_gain > 0.001 || right_gain > 0.001) {
+            // Generate test audio sample (in real implementation, this would come from audio buffers)
+            float phase = (params.current_time + sample_idx / 48000.0) * 440.0 * 2.0 * 3.14159;
+            float audio_sample = sin(phase) * 0.1; // 440Hz test tone
+
+            // Apply gains
+            vec2 stereo_sample = vec2(audio_sample * left_gain, audio_sample * right_gain);
+
+            // Apply ITD delay with interpolation
+            if (abs(itd_delay) > 0.1) {
+                vec2 previous_sample = vec2(audio_sample * 0.5); // Simplified previous sample
+                stereo_sample = interpolate_audio_sample(abs(itd_delay), stereo_sample, previous_sample);
+
+                // Apply delay to appropriate channel
+                if (itd_delay > 0.0) {
+                    // Delay right channel
+                    stereo_sample.y = previous_sample.y;
+                } else {
+                    // Delay left channel
+                    stereo_sample.x = previous_sample.x;
+                }
+            }
+
+            // Apply environmental effects if enabled
+            if (params.enable_environmental_effects != 0) {
+                float source_distance = 1.0 / max(distance_attenuation, 0.001);
+                stereo_sample = apply_environmental_effects(
+                    stereo_sample,
+                    params.environmental_room_size,
+                    params.environmental_absorption,
+                    source_distance,
+                    environmental_params.reverb_decay_time
+                );
+            }
+
+            // Frequency-dependent processing (simplified)
+            float freq_response = calculate_frequency_response(1, 1000.0); // Assume cardioid at 1kHz
+            stereo_sample *= freq_response;
+
+            mixed_sample += stereo_sample;
+        }
+    }
+
+    // Apply master volume and clipping protection
+    mixed_sample *= params.master_volume;
+    mixed_sample = clamp(mixed_sample, vec2(-1.0), vec2(1.0));
+
+    // Write to output buffer
+    audio_output.left_samples[sample_idx] = mixed_sample.x;
+    audio_output.right_samples[sample_idx] = mixed_sample.y;
+
+    // Calculate audio levels for monitoring
+    if (sample_idx == 0) {
+        audio_output.sample_count = SAMPLES_PER_FRAME;
+
+        // Calculate peak and RMS levels
+        float peak_left = 0.0;
+        float peak_right = 0.0;
+        float rms_left = 0.0;
+        float rms_right = 0.0;
+
+        for (uint i = 0; i < SAMPLES_PER_FRAME; ++i) {
+            float left_sample = audio_output.left_samples[i];
+            float right_sample = audio_output.right_samples[i];
+
+            peak_left = max(peak_left, abs(left_sample));
+            peak_right = max(peak_right, abs(right_sample));
+
+            rms_left += left_sample * left_sample;
+            rms_right += right_sample * right_sample;
+        }
+
+        rms_left = sqrt(rms_left / float(SAMPLES_PER_FRAME));
+        rms_right = sqrt(rms_right / float(SAMPLES_PER_FRAME));
+
+        audio_output.peak_level_left = peak_left;
+        audio_output.peak_level_right = peak_right;
+        audio_output.rms_level_left = rms_left;
+        audio_output.rms_level_right = rms_right;
+
+        // Update performance statistics
+        float processing_time = (params.current_time - processing_start_time) * 1000.0;
+        update_performance_stats(params.source_count, processing_time);
+
+        // Frame counting
+        atomicAdd(perf_stats.frame_number, 1);
+    }
+}

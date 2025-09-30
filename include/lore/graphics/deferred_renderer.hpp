@@ -14,6 +14,8 @@ namespace lore::graphics {
 
 // Forward declarations
 class GraphicsSystem;
+class PostProcessPipeline;
+struct PostProcessConfig;
 
 /**
  * @brief G-Buffer configuration for deferred rendering
@@ -286,6 +288,13 @@ public:
     uint32_t register_material(const PBRMaterial& material);
     const PBRMaterial& get_material(uint32_t material_id) const;
 
+    // Post-processing management
+    void set_post_process_config(const PostProcessConfig& config);
+    const PostProcessConfig& get_post_process_config() const;
+    PostProcessConfig& get_post_process_config_mut();
+    bool is_post_processing_enabled() const { return post_process_enabled_; }
+    void set_post_processing_enabled(bool enabled) { post_process_enabled_ = enabled; }
+
     // Getters
     const GBuffer& get_gbuffer() const { return gbuffer_; }
     VkRenderPass get_geometry_render_pass() const { return gbuffer_.render_pass; }
@@ -376,6 +385,15 @@ private:
     void destroy_shadow_maps();
     void create_shadow_sampler();
     void update_shadow_descriptor_set();
+
+    // Post-processing
+    std::unique_ptr<PostProcessPipeline> post_process_pipeline_;
+    bool post_process_enabled_ = true;
+
+    // HDR intermediate buffer (for post-processing)
+    GBufferAttachment hdr_buffer_;
+    void create_hdr_buffer(VkExtent2D extent);
+    void destroy_hdr_buffer();
 
     // Statistics
     Stats stats_;

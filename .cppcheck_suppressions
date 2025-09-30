@@ -1,0 +1,4 @@
+// Cppcheck suppression file for Lore Engine
+// Add suppressions here for false positives
+// Format: <error id> <filename:line>
+

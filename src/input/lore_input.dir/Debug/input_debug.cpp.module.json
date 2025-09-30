@@ -1,0 +1,14 @@
+{
+    "version": 1,
+    "revision": 0,
+    "rules": [
+        {
+            "primary-output": "lore_input.dir\\Debug\\input_debug.obj",
+            "outputs": [
+                "G:\\repos\\lore\\src\\input\\Debug\\lore_input.pdb",
+                "lore_input.dir\\Debug\\"
+            ],
+            "requires": []
+        }
+    ]
+}

@@ -1,0 +1,196 @@
+#version 450
+
+// GPU ECS Transform Integration Compute Shader
+// Updates audio source positions and orientations from ECS transform components
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+// ECS Transform data
+layout(std140, binding = 0) readonly buffer TransformBuffer {
+    mat4 transform_matrix;
+    vec3 position;
+    float padding1;
+    vec4 rotation; // Quaternion
+    vec3 scale;
+    float padding2;
+    vec3 forward;
+    float padding3;
+    vec3 up;
+    float padding4;
+    vec3 right;
+    float padding5;
+    uint entity_id;
+    uint is_dirty;
+    uint padding[2];
+} transforms[];
+
+// Audio source data (read-write)
+layout(std140, binding = 1) buffer AudioSourceBuffer {
+    uint entity_id;
+    vec4 position;
+    vec4 velocity;
+    float volume;
+    float pitch;
+    float min_distance;
+    float max_distance;
+    float rolloff_factor;
+    uint is_3d;
+    uint is_playing;
+    uint has_directional;
+    uint padding[1];
+} audio_sources[];
+
+// Directional audio source data (read-write)
+layout(std140, binding = 2) buffer DirectionalSourceBuffer {
+    uint entity_id;
+    vec4 forward_direction;
+    uint directivity_pattern;
+    float inner_cone_angle;
+    float outer_cone_angle;
+    float outer_cone_gain;
+    float directivity_sharpness;
+    uint enable_hrtf;
+    uint enable_binaural;
+    float head_radius;
+    float ear_distance;
+    float crossfeed_amount;
+    float phase_shift_amount;
+    float custom_response[361];
+    uint custom_response_count;
+    uint padding[3];
+} directional_sources[];
+
+// Previous frame positions for velocity calculation
+layout(std140, binding = 3) buffer PreviousPositionsBuffer {
+    vec3 previous_position;
+    float padding;
+} previous_positions[];
+
+// Push constants
+layout(push_constant) uniform PushConstants {
+    float delta_time;
+    uint transform_count;
+    uint audio_source_count;
+    uint directional_source_count;
+    uint enable_velocity_calculation;
+    uint enable_automatic_lod;
+    float lod_distance_threshold;
+    uint padding;
+} params;
+
+// Calculate velocity from position change
+vec3 calculate_velocity(vec3 current_pos, vec3 previous_pos, float dt) {
+    if (dt > 0.0001) {
+        return (current_pos - previous_pos) / dt;
+    }
+    return vec3(0.0);
+}
+
+// Automatic Level of Detail based on distance to listener
+float calculate_audio_lod(vec3 source_pos, float distance_threshold) {
+    // In a full implementation, this would calculate distance to nearest listener
+    // For now, we'll use a simple distance-based LOD
+    float distance = length(source_pos); // Distance from origin
+
+    if (distance < distance_threshold * 0.5) {
+        return 1.0; // Full quality
+    } else if (distance < distance_threshold) {
+        return 0.5; // Medium quality
+    } else {
+        return 0.1; // Low quality/culled
+    }
+}
+
+// Update directional source orientation from transform
+void update_directional_orientation(uint transform_idx, uint directional_idx) {
+    directional_sources[directional_idx].forward_direction = vec4(transforms[transform_idx].forward, 0.0);
+
+    // Optional: Update other directional parameters based on transform scale
+    vec3 scale = transforms[transform_idx].scale;
+    float avg_scale = (scale.x + scale.y + scale.z) / 3.0;
+
+    // Scale affects the directional cone angles (larger objects = wider cones)
+    if (avg_scale > 1.0) {
+        float scale_factor = clamp(avg_scale, 1.0, 3.0);
+        float current_inner = directional_sources[directional_idx].inner_cone_angle;
+        float current_outer = directional_sources[directional_idx].outer_cone_angle;
+
+        // Slightly widen cones for larger objects
+        directional_sources[directional_idx].inner_cone_angle = min(current_inner * scale_factor, 180.0);
+        directional_sources[directional_idx].outer_cone_angle = min(current_outer * scale_factor, 360.0);
+    }
+}
+
+void main() {
+    uint audio_source_idx = gl_GlobalInvocationID.x;
+
+    if (audio_source_idx >= params.audio_source_count) {
+        return;
+    }
+
+    uint entity_id = audio_sources[audio_source_idx].entity_id;
+
+    // Find matching transform
+    uint transform_idx = 0xFFFFFFFF;
+    for (uint i = 0; i < params.transform_count; ++i) {
+        if (transforms[i].entity_id == entity_id) {
+            transform_idx = i;
+            break;
+        }
+    }
+
+    if (transform_idx == 0xFFFFFFFF) {
+        return; // No transform found for this audio source
+    }
+
+    // Only update if transform is dirty (changed this frame)
+    if (transforms[transform_idx].is_dirty == 0) {
+        return;
+    }
+
+    vec3 new_position = transforms[transform_idx].position;
+    vec3 old_position = audio_sources[audio_source_idx].position.xyz;
+
+    // Update position
+    audio_sources[audio_source_idx].position = vec4(new_position, 1.0);
+
+    // Calculate velocity if enabled
+    if (params.enable_velocity_calculation != 0) {
+        vec3 velocity = calculate_velocity(new_position, old_position, params.delta_time);
+        audio_sources[audio_source_idx].velocity = vec4(velocity, 0.0);
+
+        // Store current position for next frame
+        if (audio_source_idx < params.audio_source_count) {
+            previous_positions[audio_source_idx].previous_position = new_position;
+        }
+    }
+
+    // Apply automatic Level of Detail if enabled
+    if (params.enable_automatic_lod != 0) {
+        float lod_factor = calculate_audio_lod(new_position, params.lod_distance_threshold);
+
+        // Adjust audio quality based on LOD
+        if (lod_factor < 0.2) {
+            // Very distant - reduce to mono and lower quality
+            audio_sources[audio_source_idx].is_3d = 0;
+        } else if (lod_factor < 0.6) {
+            // Medium distance - maintain 3D but reduce processing
+            audio_sources[audio_source_idx].is_3d = 1;
+            // Could disable some effects here
+        } else {
+            // Close - full quality
+            audio_sources[audio_source_idx].is_3d = 1;
+        }
+    }
+
+    // Update directional source if this entity has one
+    if (audio_sources[audio_source_idx].has_directional != 0) {
+        // Find matching directional source
+        for (uint i = 0; i < params.directional_source_count; ++i) {
+            if (directional_sources[i].entity_id == entity_id) {
+                update_directional_orientation(transform_idx, i);
+                break;
+            }
+        }
+    }
+}

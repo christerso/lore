@@ -1,0 +1,14 @@
+{
+    "version": 1,
+    "revision": 0,
+    "rules": [
+        {
+            "primary-output": "gpu_compute_demo.dir\\Debug\\gpu_compute_demo.obj",
+            "outputs": [
+                "G:\\repos\\lore\\gpu_compute_demo.dir\\Debug\\vc143.pdb",
+                "gpu_compute_demo.dir\\Debug\\"
+            ],
+            "requires": []
+        }
+    ]
+}

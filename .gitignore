@@ -1,0 +1,243 @@
+# Lore Engine - C++/Vulkan Project .gitignore
+
+# Build Directories
+cmake-build-*/
+build/
+out/
+dist/
+bin/
+lib/
+obj/
+
+# IDE Files
+.vs/
+.vscode/
+.idea/
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+*.sln
+*.suo
+*.user
+*.userosscache
+*.sdf
+*.opensdf
+*.VC.db
+*.VC.VC.opendb
+
+# CMake Generated Files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.cmake
+!cmake/CPM.cmake
+!cmake/generate_compile_commands.cmake
+
+# Ninja Build Files
+build.ninja
+.ninja_deps
+.ninja_log
+
+# Compiled Object Files
+*.o
+*.obj
+*.lo
+*.a
+*.lib
+*.so
+*.dylib
+*.dll
+*.exe
+*.out
+*.app
+*.ilk
+*.pdb
+*.pch
+*.tmp
+*.res
+*.manifest
+*.exp
+*.lib
+*.map
+
+# Shader Compiled Files
+*.spv
+shaders/compiled/
+**/shaders/compiled/
+
+# Compiled Assets
+assets/compiled/
+**/assets/compiled/
+
+# Dependency Cache
+.ccache/
+.deps/
+
+# Dependency Sources (CPM/FetchContent)
+_deps/
+_cpm_packages/
+_cpmsources/
+
+# Local Configuration
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Editor Files
+*~
+.swp
+.swo
+.DS_Store
+Thumbs.db
+*.bak
+*.backup
+*.orig
+*.rej
+
+# Debug Files
+*.core
+*.stackdump
+*.dump
+
+# Profiling & Optimization
+*.prof
+*.pgcda
+*.pgd
+*.gcda
+*.gcno
+coverage.xml
+*.coverage
+cover/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+dev-debug.log
+
+# Temporary Files
+*.tmp
+*.temp
+*.cache
+*.lock
+
+# Platform Specific
+# Windows
+*.exe.manifest
+*.exe.config
+*.exe.embed.manifest
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSoverride
+Icon?
+
+# Linux
+*~
+
+# Package Managers
+node_modules/
+
+# Documentation Build
+docs/build/
+docs/_build/
+*.aux
+*.bbl
+*.blg
+*.fdb_latexmk
+*.fls
+*.toc
+*.fff
+*.log
+*.out
+*.synctex.gz
+*.pdf
+
+# CLion Specific
+cmake-build-debug-*/
+cmake-build-release-*/
+cmake-build-relwithdebinfo-*/
+cmake-build-minsizerel-*/
+
+# MSBuild Specific
+MSBuild.binlog
+msbuild.log
+
+# Vulkan Specific
+*.hierarchy
+*.settings
+
+# Audio Files (if you have large audio files that shouldn't be committed)
+*.mp3
+*.wav
+*.ogg
+*.flac
+!assets/audio/  # Keep directory structure
+
+# Texture Files (if you have large textures that shouldn't be committed)
+*.png
+*.jpg
+*.jpeg
+*.tga
+*.dds
+*.ktx
+!assets/textures/  # Keep directory structure
+
+# Model Files (if you have large models that shouldn't be committed)
+*.obj
+*.fbx
+*.gltf
+*.glb
+!assets/models/  # Keep directory structure
+
+# Save Games & Runtime Data
+save/
+saves/
+config/
+settings.ini
+user_prefs.json
+
+# Performance Reports
+perf_reports/
+benchmarks/
+
+# Testing
+TestResults/
+*.test
+*.tests
+
+# Local Development Scripts
+local_*.bat
+local_*.ps1
+local_*.sh
+
+# Archive Files
+*.zip
+*.tar
+*.tar.gz
+*.tar.bz2
+*.rar
+*.7z
+
+# Database Files
+*.db
+*.sqlite
+*.sqlite3
+
+# Crash Dumps
+*.dmp
+*.mdmp
+*.hdmp
+
+# Windows Specific Cache
+desktop.ini
+$RECYCLE.BIN/
+Thumbs.db
+ehthumbs.db
+ehthumbs_vista.db

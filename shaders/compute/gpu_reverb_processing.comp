@@ -1,0 +1,572 @@
+#version 450
+
+// GPU Reverb Processing Compute Shader - Advanced reverb with material-based responses
+// Complete GPU implementation for sophisticated environmental reverb using impulse response generation
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+// Push constants for reverb processing
+layout(push_constant) uniform ReverbPushConstants {
+    uint num_reverb_zones;
+    uint num_audio_sources;
+    uint impulse_response_length;
+    uint sample_rate;
+    float global_wet_level;
+    float global_dry_level;
+    float delta_time;
+    uint frame_offset;
+    uint max_early_reflections;
+    float room_temperature;
+    float air_humidity;
+    uint processing_mode; // 0=Update IRs, 1=Process Audio, 2=Generate IRs
+} push_constants;
+
+// Reverb zone definition
+struct ReverbZone {
+    vec3 center;
+    float room_size;
+    vec3 extents;
+    float damping;
+    float wet_level;
+    float dry_level;
+    float pre_delay;
+    float decay_time;
+    uint wall_material_id;
+    float diffusion;
+    float density;
+    float early_late_mix;
+    uint zone_id;
+    float modulation_rate;
+    float modulation_depth;
+    uint active_flag;
+};
+
+// Enhanced acoustic material for reverb processing
+struct ReverbMaterial {
+    vec3 frequency_absorption;     // Low, mid, high frequency absorption
+    vec3 frequency_scattering;     // Frequency-dependent scattering
+    float density;
+    float porosity;
+    float roughness;
+    float impedance;
+    float resonance_frequency;
+    float resonance_q_factor;
+    vec3 velocity_scaling;         // Sound velocity scaling per frequency
+    float nonlinear_absorption;    // Nonlinear absorption coefficient
+    float temperature_coefficient; // Temperature sensitivity
+    float humidity_coefficient;    // Humidity sensitivity
+    uint material_id;
+    uint padding[3];
+};
+
+// Audio source positioned in reverb zones
+struct AudioSourceData {
+    vec3 position;
+    float volume;
+    vec3 velocity;
+    float pitch;
+    vec3 last_position;
+    float distance_from_listener;
+    uint current_reverb_zone;
+    float zone_blend_factor;
+    uint entity_id;
+    float directivity_factor;
+    uint active_flag;
+    uint padding;
+};
+
+// Early reflection calculation
+struct EarlyReflection {
+    vec3 reflection_point;
+    float delay_time;
+    vec3 reflection_direction;
+    float energy_coefficient;
+    vec3 frequency_response;
+    float phase_shift;
+    uint material_id;
+    float distance_traveled;
+    uint reflection_order;
+    uint padding[3];
+};
+
+// Late reverberation parameters
+struct LateReverb {
+    float rt60_low;              // RT60 for low frequencies
+    float rt60_mid;              // RT60 for mid frequencies
+    float rt60_high;             // RT60 for high frequencies
+    float decay_slope;           // Decay curve shape
+    float diffusion_time;        // Time for sound to become diffuse
+    float echo_density;          // Density of late reflections
+    float coloration_factor;     // Frequency coloration strength
+    float modulation_frequency;  // Chorus/vibrato frequency
+};
+
+// Impulse response data
+struct ImpulseResponse {
+    float early_samples[256];    // Early reflection samples
+    float late_samples[1792];    // Late reverb samples (total 2048)
+    float energy_envelope[64];   // Energy envelope for late reverb
+    float frequency_response[32]; // Frequency response curve
+    uint sample_count;
+    float total_energy;
+    float peak_amplitude;
+    float rms_level;
+    float rt60_measured;
+    float clarity_index;         // C80 clarity index
+    float definition_index;      // D50 definition index
+    uint zone_id;
+};
+
+// Convolution workspace for real-time processing
+struct ConvolutionState {
+    float input_buffer[512];     // Input audio buffer
+    float output_buffer[512];    // Output audio buffer
+    float early_delay_line[1024]; // Early reflection delay line
+    float late_delay_line[4096];  // Late reverb delay line
+    uint write_position_early;
+    uint write_position_late;
+    float feedback_matrix[4];    // 2x2 feedback matrix for late reverb
+    float modulation_lfo[2];     // LFO state for chorus/vibrato
+    float energy_tracker;
+    uint buffer_position;
+};
+
+// Storage buffers
+layout(set = 0, binding = 0, std430) restrict readonly buffer ReverbZoneBuffer {
+    ReverbZone reverb_zones[];
+};
+
+layout(set = 0, binding = 1, std430) restrict readonly buffer ReverbMaterialBuffer {
+    ReverbMaterial materials[];
+};
+
+layout(set = 0, binding = 2, std430) restrict readonly buffer AudioSourceBuffer {
+    AudioSourceData audio_sources[];
+};
+
+layout(set = 0, binding = 3, std430) restrict buffer ImpulseResponseBuffer {
+    ImpulseResponse impulse_responses[];
+};
+
+layout(set = 0, binding = 4, std430) restrict buffer EarlyReflectionBuffer {
+    EarlyReflection early_reflections[];
+};
+
+layout(set = 0, binding = 5, std430) restrict buffer ConvolutionStateBuffer {
+    ConvolutionState convolution_states[];
+};
+
+layout(set = 0, binding = 6, std430) restrict buffer AudioOutputBuffer {
+    float left_channel[];
+};
+
+layout(set = 0, binding = 7, std430) restrict buffer AudioOutputRightBuffer {
+    float right_channel[];
+};
+
+layout(set = 0, binding = 8, std430) restrict buffer ReverbStatsBuffer {
+    uint total_impulse_responses_generated;
+    uint total_convolution_operations;
+    float average_rt60;
+    float average_clarity;
+    uint active_reverb_zones;
+    float gpu_processing_time;
+    uint early_reflections_calculated;
+    uint late_reverb_samples_processed;
+};
+
+// Shared memory for efficient processing
+shared float shared_audio_buffer[512];
+shared float shared_impulse_cache[256];
+shared float shared_frequency_response[32];
+
+// Hash function for procedural room modeling
+uint hash(uint x) {
+    x ^= x >> 16;
+    x *= 0x85ebca6bu;
+    x ^= x >> 13;
+    x *= 0xc2b2ae35u;
+    x ^= x >> 16;
+    return x;
+}
+
+float random_float(uint seed) {
+    return float(hash(seed)) / float(0xffffffffu);
+}
+
+// Calculate RT60 for a given frequency based on Sabine's formula
+float calculate_rt60_sabine(float room_volume, float total_absorption_area, float frequency) {
+    float sabine_constant = 0.161; // Sabine constant for metric units
+    return sabine_constant * room_volume / max(total_absorption_area, 0.001);
+}
+
+// Generate early reflections for a reverb zone
+void generate_early_reflections(uint zone_id, uint thread_id) {
+    if (zone_id >= reverb_zones.length()) return;
+
+    ReverbZone zone = reverb_zones[zone_id];
+    uint wall_material_id = zone.wall_material_id;
+
+    if (wall_material_id >= materials.length()) return;
+
+    ReverbMaterial material = materials[wall_material_id];
+
+    // Calculate room dimensions for reflection modeling
+    float room_width = zone.extents.x * 2.0;
+    float room_height = zone.extents.y * 2.0;
+    float room_depth = zone.extents.z * 2.0;
+    float room_volume = room_width * room_height * room_depth;
+
+    // Generate early reflections based on room geometry
+    uint max_reflections = min(push_constants.max_early_reflections, 64u);
+    uint reflection_base_idx = zone_id * max_reflections;
+
+    for (uint i = 0; i < max_reflections && (reflection_base_idx + i) < early_reflections.length(); i++) {
+        uint reflection_idx = reflection_base_idx + i;
+        uint reflection_seed = zone_id * 1000u + i * 100u + thread_id;
+
+        // Simulate reflections from different surfaces
+        uint surface_type = i % 6; // 6 room surfaces (walls, floor, ceiling)
+        vec3 reflection_point;
+        vec3 surface_normal;
+        float surface_area;
+
+        // Calculate reflection point based on surface
+        if (surface_type == 0) { // Front wall
+            reflection_point = zone.center + vec3(zone.extents.x, 0, 0);
+            surface_normal = vec3(-1, 0, 0);
+            surface_area = room_height * room_depth;
+        } else if (surface_type == 1) { // Back wall
+            reflection_point = zone.center + vec3(-zone.extents.x, 0, 0);
+            surface_normal = vec3(1, 0, 0);
+            surface_area = room_height * room_depth;
+        } else if (surface_type == 2) { // Left wall
+            reflection_point = zone.center + vec3(0, 0, zone.extents.z);
+            surface_normal = vec3(0, 0, -1);
+            surface_area = room_width * room_height;
+        } else if (surface_type == 3) { // Right wall
+            reflection_point = zone.center + vec3(0, 0, -zone.extents.z);
+            surface_normal = vec3(0, 0, 1);
+            surface_area = room_width * room_height;
+        } else if (surface_type == 4) { // Floor
+            reflection_point = zone.center + vec3(0, -zone.extents.y, 0);
+            surface_normal = vec3(0, 1, 0);
+            surface_area = room_width * room_depth;
+        } else { // Ceiling
+            reflection_point = zone.center + vec3(0, zone.extents.y, 0);
+            surface_normal = vec3(0, -1, 0);
+            surface_area = room_width * room_depth;
+        }
+
+        // Add some randomness for higher-order reflections
+        if (i >= 6) {
+            vec3 random_offset;
+            random_offset.x = (random_float(reflection_seed) - 0.5) * zone.extents.x * 0.5;
+            random_offset.y = (random_float(reflection_seed + 1) - 0.5) * zone.extents.y * 0.5;
+            random_offset.z = (random_float(reflection_seed + 2) - 0.5) * zone.extents.z * 0.5;
+            reflection_point += random_offset;
+        }
+
+        // Calculate reflection properties
+        float distance_to_reflection = length(reflection_point - zone.center);
+        float delay_time = distance_to_reflection / 343.0; // Speed of sound
+
+        // Energy calculation based on distance and material absorption
+        float distance_attenuation = 1.0 / (1.0 + distance_to_reflection * distance_to_reflection * 0.001);
+        float material_reflection = 1.0 - (material.frequency_absorption.x + material.frequency_absorption.y + material.frequency_absorption.z) / 3.0;
+        float energy_coefficient = distance_attenuation * material_reflection;
+
+        // Frequency response based on material properties
+        vec3 frequency_response = vec3(1.0) - material.frequency_absorption;
+
+        // Apply surface area scaling
+        float area_factor = sqrt(surface_area / (room_width * room_height)); // Normalize to typical wall
+        energy_coefficient *= area_factor;
+
+        // Phase shift based on path length
+        float phase_shift = mod(distance_to_reflection / 0.343, 1.0) * 2.0 * 3.14159265359; // 1kHz reference
+
+        // Store early reflection
+        early_reflections[reflection_idx].reflection_point = reflection_point;
+        early_reflections[reflection_idx].delay_time = delay_time;
+        early_reflections[reflection_idx].reflection_direction = surface_normal;
+        early_reflections[reflection_idx].energy_coefficient = energy_coefficient;
+        early_reflections[reflection_idx].frequency_response = frequency_response;
+        early_reflections[reflection_idx].phase_shift = phase_shift;
+        early_reflections[reflection_idx].material_id = wall_material_id;
+        early_reflections[reflection_idx].distance_traveled = distance_to_reflection;
+        early_reflections[reflection_idx].reflection_order = (i / 6) + 1;
+    }
+}
+
+// Generate late reverberation tail
+void generate_late_reverb_tail(uint zone_id, inout ImpulseResponse ir) {
+    if (zone_id >= reverb_zones.length()) return;
+
+    ReverbZone zone = reverb_zones[zone_id];
+    ReverbMaterial material = materials[min(zone.wall_material_id, uint(materials.length() - 1))];
+
+    // Calculate room acoustics parameters
+    float room_volume = zone.extents.x * zone.extents.y * zone.extents.z * 8.0; // Box volume
+    float surface_area = 2.0 * (zone.extents.x * zone.extents.y + zone.extents.y * zone.extents.z + zone.extents.z * zone.extents.x) * 4.0;
+
+    // Calculate frequency-dependent RT60
+    vec3 total_absorption = material.frequency_absorption * surface_area;
+    float rt60_low = calculate_rt60_sabine(room_volume, total_absorption.x, 250.0);
+    float rt60_mid = calculate_rt60_sabine(room_volume, total_absorption.y, 1000.0);
+    float rt60_high = calculate_rt60_sabine(room_volume, total_absorption.z, 4000.0);
+
+    // Apply zone-specific decay time scaling
+    rt60_low *= zone.decay_time;
+    rt60_mid *= zone.decay_time;
+    rt60_high *= zone.decay_time;
+
+    ir.rt60_measured = rt60_mid; // Store primary RT60
+
+    // Generate late reverb samples with exponential decay
+    uint late_start_sample = 256; // After early reflections
+    float time_per_sample = 1.0 / float(push_constants.sample_rate);
+
+    for (uint i = 0; i < 1792; i++) { // Late reverb samples
+        float time = float(late_start_sample + i) * time_per_sample;
+
+        // Generate dense reflection pattern
+        float noise_seed = float(zone_id * 10000 + i);
+        float noise = sin(noise_seed * 12.9898) * cos(noise_seed * 78.233) * 43758.5453;
+        noise = fract(noise) * 2.0 - 1.0; // Convert to [-1, 1]
+
+        // Frequency-dependent decay
+        float decay_low = exp(-6.91 * time / rt60_low);    // -60dB decay
+        float decay_mid = exp(-6.91 * time / rt60_mid);
+        float decay_high = exp(-6.91 * time / rt60_high);
+
+        // Combine frequency responses with noise
+        float sample_low = noise * decay_low * 0.4;
+        float sample_mid = noise * decay_mid * 0.4;
+        float sample_high = noise * decay_high * 0.2;
+
+        // Mix frequency bands
+        ir.late_samples[i] = (sample_low + sample_mid + sample_high) * zone.density;
+
+        // Apply diffusion (all-pass filter simulation)
+        if (i > 10) {
+            float diffusion_delay = ir.late_samples[i - 7] * zone.diffusion * 0.3;
+            ir.late_samples[i] += diffusion_delay;
+        }
+
+        // Apply modulation for naturalness
+        float modulation_phase = time * zone.modulation_rate * 2.0 * 3.14159265359;
+        float modulation = sin(modulation_phase) * zone.modulation_depth;
+        ir.late_samples[i] *= (1.0 + modulation);
+    }
+
+    // Calculate energy envelope for late reverb
+    for (uint i = 0; i < 64; i++) {
+        float time = float(i) / 64.0 * rt60_mid; // Span the RT60 time
+        ir.energy_envelope[i] = exp(-6.91 * time / rt60_mid);
+    }
+}
+
+// Generate complete impulse response for a reverb zone
+void generate_impulse_response(uint zone_id, uint thread_id) {
+    if (zone_id >= impulse_responses.length()) return;
+
+    ImpulseResponse ir;
+
+    // Initialize impulse response
+    for (uint i = 0; i < 256; i++) {
+        ir.early_samples[i] = 0.0;
+    }
+    for (uint i = 0; i < 1792; i++) {
+        ir.late_samples[i] = 0.0;
+    }
+
+    // Generate early reflections and add to IR
+    uint max_reflections = min(push_constants.max_early_reflections, 64u);
+    uint reflection_base_idx = zone_id * max_reflections;
+
+    for (uint i = 0; i < max_reflections && (reflection_base_idx + i) < early_reflections.length(); i++) {
+        uint reflection_idx = reflection_base_idx + i;
+        EarlyReflection reflection = early_reflections[reflection_idx];
+
+        // Convert delay time to sample index
+        uint sample_idx = uint(reflection.delay_time * float(push_constants.sample_rate));
+        if (sample_idx < 256) {
+            // Add early reflection to impulse response
+            float amplitude = reflection.energy_coefficient * 0.5;
+            ir.early_samples[sample_idx] += amplitude * sin(reflection.phase_shift);
+        }
+    }
+
+    // Generate late reverberation
+    generate_late_reverb_tail(zone_id, ir);
+
+    // Calculate impulse response statistics
+    ir.sample_count = 2048;
+    ir.zone_id = zone_id;
+
+    float total_energy = 0.0;
+    float peak_amplitude = 0.0;
+    for (uint i = 0; i < 256; i++) {
+        float sample = abs(ir.early_samples[i]);
+        total_energy += sample * sample;
+        peak_amplitude = max(peak_amplitude, sample);
+    }
+    for (uint i = 0; i < 1792; i++) {
+        float sample = abs(ir.late_samples[i]);
+        total_energy += sample * sample;
+        peak_amplitude = max(peak_amplitude, sample);
+    }
+
+    ir.total_energy = total_energy;
+    ir.peak_amplitude = peak_amplitude;
+    ir.rms_level = sqrt(total_energy / 2048.0);
+
+    // Calculate clarity index C80 (ratio of early to late energy)
+    float early_energy = 0.0;
+    float late_energy = 0.0;
+    uint c80_boundary = uint(0.08 * float(push_constants.sample_rate)); // 80ms
+
+    for (uint i = 0; i < min(c80_boundary, 256u); i++) {
+        early_energy += ir.early_samples[i] * ir.early_samples[i];
+    }
+    for (uint i = 0; i < min(1792u, 2048u - c80_boundary); i++) {
+        late_energy += ir.late_samples[i] * ir.late_samples[i];
+    }
+
+    ir.clarity_index = 10.0 * log(max(early_energy / max(late_energy, 0.001), 0.001)) / log(10.0);
+
+    // Store completed impulse response
+    impulse_responses[zone_id] = ir;
+
+    // Update statistics
+    atomicAdd(total_impulse_responses_generated, 1);
+    atomicAdd(average_rt60, ir.rt60_measured);
+    atomicAdd(average_clarity, ir.clarity_index);
+}
+
+// Apply real-time convolution with impulse response
+void process_audio_convolution(uint source_id, uint thread_id) {
+    if (source_id >= audio_sources.length() || audio_sources[source_id].active_flag == 0) {
+        return;
+    }
+
+    AudioSourceData source = audio_sources[source_id];
+    uint zone_id = source.current_reverb_zone;
+
+    if (zone_id >= reverb_zones.length() || zone_id >= impulse_responses.length()) {
+        return;
+    }
+
+    ReverbZone zone = reverb_zones[zone_id];
+    ImpulseResponse ir = impulse_responses[zone_id];
+
+    uint convolution_state_idx = source_id;
+    if (convolution_state_idx >= convolution_states.length()) {
+        return;
+    }
+
+    // Generate input signal for convolution (procedural for demo)
+    for (uint i = 0; i < 512; i++) {
+        float t = (float(push_constants.frame_offset + i) / float(push_constants.sample_rate));
+        float signal = sin(2.0 * 3.14159265359 * 440.0 * t) * source.volume * 0.3; // 440Hz test tone
+        convolution_states[convolution_state_idx].input_buffer[i] = signal;
+    }
+
+    // Early reflection processing
+    for (uint i = 0; i < 512; i++) {
+        float early_sum = 0.0;
+
+        // Convolve with early reflections (limited convolution for performance)
+        for (uint j = 0; j < min(64u, 256u); j++) {
+            if (i >= j) {
+                early_sum += convolution_states[convolution_state_idx].input_buffer[i - j] * ir.early_samples[j];
+            }
+        }
+
+        convolution_states[convolution_state_idx].output_buffer[i] = early_sum * zone.wet_level;
+    }
+
+    // Late reverb processing using feedback delay network
+    uint write_pos = convolution_states[convolution_state_idx].write_position_late;
+
+    for (uint i = 0; i < 512; i++) {
+        float input_sample = convolution_states[convolution_state_idx].input_buffer[i];
+
+        // Simple feedback delay network
+        uint delay_pos_1 = (write_pos + i) % 4096;
+        uint delay_pos_2 = (write_pos + i + 1500) % 4096;
+        uint delay_pos_3 = (write_pos + i + 2500) % 4096;
+        uint delay_pos_4 = (write_pos + i + 3500) % 4096;
+
+        float delayed_1 = convolution_states[convolution_state_idx].late_delay_line[delay_pos_1];
+        float delayed_2 = convolution_states[convolution_state_idx].late_delay_line[delay_pos_2];
+        float delayed_3 = convolution_states[convolution_state_idx].late_delay_line[delay_pos_3];
+        float delayed_4 = convolution_states[convolution_state_idx].late_delay_line[delay_pos_4];
+
+        // Feedback matrix (Householder matrix for decorrelation)
+        float fb_1 = (delayed_1 + delayed_2 + delayed_3 + delayed_4) * 0.5;
+        float fb_2 = (delayed_1 - delayed_2 + delayed_3 - delayed_4) * 0.5;
+        float fb_3 = (delayed_1 + delayed_2 - delayed_3 - delayed_4) * 0.5;
+        float fb_4 = (delayed_1 - delayed_2 - delayed_3 + delayed_4) * 0.5;
+
+        // Apply damping
+        fb_1 *= zone.damping;
+        fb_2 *= zone.damping;
+        fb_3 *= zone.damping;
+        fb_4 *= zone.damping;
+
+        // Write back to delay lines
+        convolution_states[convolution_state_idx].late_delay_line[delay_pos_1] = input_sample + fb_1 * 0.8;
+        convolution_states[convolution_state_idx].late_delay_line[delay_pos_2] = fb_2 * 0.8;
+        convolution_states[convolution_state_idx].late_delay_line[delay_pos_3] = fb_3 * 0.8;
+        convolution_states[convolution_state_idx].late_delay_line[delay_pos_4] = fb_4 * 0.8;
+
+        // Mix late reverb output
+        float late_output = (delayed_1 + delayed_2 + delayed_3 + delayed_4) * 0.25 * zone.wet_level;
+
+        // Combine early and late reverb
+        float total_reverb = convolution_states[convolution_state_idx].output_buffer[i] + late_output;
+
+        // Add dry signal
+        float final_output = convolution_states[convolution_state_idx].input_buffer[i] * zone.dry_level + total_reverb;
+
+        // Output to audio buffers (stereo)
+        uint output_idx = push_constants.frame_offset + i;
+        if (output_idx < left_channel.length()) {
+            atomicAdd(left_channel[output_idx], final_output * 0.5);
+            atomicAdd(right_channel[output_idx], final_output * 0.5);
+        }
+    }
+
+    // Update convolution state
+    convolution_states[convolution_state_idx].write_position_late = (write_pos + 512) % 4096;
+    convolution_states[convolution_state_idx].buffer_position = push_constants.frame_offset;
+
+    atomicAdd(total_convolution_operations, 1);
+    atomicAdd(late_reverb_samples_processed, 512);
+}
+
+void main() {
+    uint thread_id = gl_GlobalInvocationID.x;
+
+    if (push_constants.processing_mode == 0u) {
+        // Update impulse responses mode
+        if (thread_id < push_constants.num_reverb_zones) {
+            generate_early_reflections(thread_id, thread_id);
+            barrier();
+            generate_impulse_response(thread_id, thread_id);
+            atomicAdd(active_reverb_zones, 1);
+        }
+    } else if (push_constants.processing_mode == 1u) {
+        // Process audio mode
+        if (thread_id < push_constants.num_audio_sources) {
+            process_audio_convolution(thread_id, thread_id);
+        }
+    } else if (push_constants.processing_mode == 2u) {
+        // Generate new impulse responses mode
+        if (thread_id < push_constants.num_reverb_zones) {
+            generate_impulse_response(thread_id, thread_id);
+        }
+    }
+}

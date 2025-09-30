@@ -1,0 +1,29 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project>
+  <ProjectOutputs>
+    <ProjectOutput>
+      <FullPath>G:\repos\lore\x64\Debug\ZERO_CHECK</FullPath>
+    </ProjectOutput>
+    <ProjectOutput>
+      <FullPath>G:\repos\lore\_deps\glslang-build\StandAlone\Debug\glslang.exe</FullPath>
+    </ProjectOutput>
+    <ProjectOutput>
+      <FullPath>G:\repos\lore\x64\Debug\compile_shaders</FullPath>
+    </ProjectOutput>
+    <ProjectOutput>
+      <FullPath>G:\repos\lore\Debug\gpu_compute_demo.exe</FullPath>
+    </ProjectOutput>
+    <ProjectOutput>
+      <FullPath>G:\repos\lore\Debug\lore.exe</FullPath>
+    </ProjectOutput>
+    <ProjectOutput>
+      <FullPath>G:\repos\lore\Debug\test_gpu_compute.exe</FullPath>
+    </ProjectOutput>
+    <ProjectOutput>
+      <FullPath>G:\repos\lore\x64\Debug\ALL_BUILD</FullPath>
+    </ProjectOutput>
+  </ProjectOutputs>
+  <ContentFiles />
+  <SatelliteDlls />
+  <NonRecipeFileRefs />
+</Project>

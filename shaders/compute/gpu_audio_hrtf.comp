@@ -1,0 +1,316 @@
+#version 450
+
+// GPU HRTF Convolution Compute Shader
+// Performs real-time HRTF convolution for binaural audio processing
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+#define HRTF_IR_LENGTH 512  // HRTF impulse response length
+#define SAMPLE_RATE 44100.0
+#define PI 3.14159265359
+
+struct HRTFConvolutionData {
+    // Input audio buffer
+    float input_samples[HRTF_IR_LENGTH];
+
+    // HRTF impulse responses for left and right ears
+    float left_hrtf_ir[HRTF_IR_LENGTH];
+    float right_hrtf_ir[HRTF_IR_LENGTH];
+
+    // Output stereo samples
+    float left_output[HRTF_IR_LENGTH];
+    float right_output[HRTF_IR_LENGTH];
+
+    // Processing parameters
+    vec3 source_position;
+    float azimuth;
+    vec3 listener_position;
+    float elevation;
+    vec3 listener_forward;
+    float distance;
+    vec3 listener_up;
+    uint sample_count;
+
+    // HRTF parameters
+    float head_radius;
+    float ear_distance;
+    float frequency_response_factor;
+    float time_delay_factor;
+
+    uint padding[2];
+};
+
+struct FrequencyBin {
+    float magnitude;
+    float phase;
+};
+
+layout(set = 0, binding = 0, std430) restrict buffer HRTFBuffer {
+    HRTFConvolutionData hrtf_data[];
+};
+
+layout(set = 0, binding = 1, std430) restrict buffer HRTFLibraryBuffer {
+    // Pre-computed HRTF database for different azimuth/elevation angles
+    float hrtf_library[73][37][2][HRTF_IR_LENGTH]; // 73 azimuths x 37 elevations x 2 ears x 512 samples
+};
+
+layout(set = 0, binding = 2, std430) restrict buffer FrequencyDomainBuffer {
+    FrequencyBin frequency_bins[];
+};
+
+layout(push_constant) uniform PushConstants {
+    uint num_sources;
+    uint ir_length;
+    float sample_rate;
+    float time_delta;
+} push_constants;
+
+// Complex number operations for FFT
+vec2 complex_multiply(vec2 a, vec2 b) {
+    return vec2(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x);
+}
+
+vec2 complex_add(vec2 a, vec2 b) {
+    return a + b;
+}
+
+float complex_magnitude(vec2 c) {
+    return sqrt(c.x * c.x + c.y * c.y);
+}
+
+float complex_phase(vec2 c) {
+    return atan(c.y, c.x);
+}
+
+// Simplified FFT implementation for real-time processing
+void fft_radix2(inout float samples[HRTF_IR_LENGTH], inout vec2 spectrum[HRTF_IR_LENGTH]) {
+    uint N = HRTF_IR_LENGTH;
+
+    // Bit-reverse ordering
+    for (uint i = 0; i < N; ++i) {
+        uint j = 0;
+        uint temp = i;
+        for (uint k = 0; k < 9; ++k) { // log2(512) = 9
+            j = (j << 1) | (temp & 1);
+            temp >>= 1;
+        }
+        if (i < j) {
+            float temp_sample = samples[i];
+            samples[i] = samples[j];
+            samples[j] = temp_sample;
+        }
+        spectrum[i] = vec2(samples[i], 0.0);
+    }
+
+    // FFT computation
+    for (uint size = 2; size <= N; size <<= 1) {
+        float angle = -2.0 * PI / float(size);
+        vec2 wn = vec2(cos(angle), sin(angle));
+
+        for (uint start = 0; start < N; start += size) {
+            vec2 w = vec2(1.0, 0.0);
+
+            for (uint k = 0; k < size / 2; ++k) {
+                uint u = start + k;
+                uint v = start + k + size / 2;
+
+                vec2 temp = complex_multiply(w, spectrum[v]);
+                spectrum[v] = complex_add(spectrum[u], -temp);
+                spectrum[u] = complex_add(spectrum[u], temp);
+
+                w = complex_multiply(w, wn);
+            }
+        }
+    }
+}
+
+// Inverse FFT for converting back to time domain
+void ifft_radix2(inout vec2 spectrum[HRTF_IR_LENGTH], inout float samples[HRTF_IR_LENGTH]) {
+    uint N = HRTF_IR_LENGTH;
+
+    // Conjugate the spectrum
+    for (uint i = 0; i < N; ++i) {
+        spectrum[i].y = -spectrum[i].y;
+    }
+
+    // Perform FFT
+    fft_radix2(samples, spectrum);
+
+    // Conjugate and normalize
+    for (uint i = 0; i < N; ++i) {
+        samples[i] = spectrum[i].x / float(N);
+        spectrum[i].y = -spectrum[i].y / float(N);
+    }
+}
+
+// Get HRTF impulse response from library based on azimuth/elevation
+void get_hrtf_ir(float azimuth_deg, float elevation_deg,
+                 inout float left_ir[HRTF_IR_LENGTH],
+                 inout float right_ir[HRTF_IR_LENGTH]) {
+
+    // Convert angles to library indices
+    int azimuth_idx = int(clamp((azimuth_deg + 180.0) / 5.0, 0.0, 72.0)); // -180 to 180 deg, 5 deg steps
+    int elevation_idx = int(clamp((elevation_deg + 90.0) / 5.0, 0.0, 36.0)); // -90 to 90 deg, 5 deg steps
+
+    // Bilinear interpolation for smooth transitions
+    float azimuth_frac = fract((azimuth_deg + 180.0) / 5.0);
+    float elevation_frac = fract((elevation_deg + 90.0) / 5.0);
+
+    int az_next = min(azimuth_idx + 1, 72);
+    int el_next = min(elevation_idx + 1, 36);
+
+    // Interpolate HRTF impulse responses
+    for (uint i = 0; i < HRTF_IR_LENGTH; ++i) {
+        // Left ear interpolation
+        float tl_left = hrtf_library[azimuth_idx][elevation_idx][0][i];
+        float tr_left = hrtf_library[az_next][elevation_idx][0][i];
+        float bl_left = hrtf_library[azimuth_idx][el_next][0][i];
+        float br_left = hrtf_library[az_next][el_next][0][i];
+
+        float top_left = mix(tl_left, tr_left, azimuth_frac);
+        float bottom_left = mix(bl_left, br_left, azimuth_frac);
+        left_ir[i] = mix(top_left, bottom_left, elevation_frac);
+
+        // Right ear interpolation
+        float tl_right = hrtf_library[azimuth_idx][elevation_idx][1][i];
+        float tr_right = hrtf_library[az_next][elevation_idx][1][i];
+        float bl_right = hrtf_library[azimuth_idx][el_next][1][i];
+        float br_right = hrtf_library[az_next][el_next][1][i];
+
+        float top_right = mix(tl_right, tr_right, azimuth_frac);
+        float bottom_right = mix(bl_right, br_right, azimuth_frac);
+        right_ir[i] = mix(top_right, bottom_right, elevation_frac);
+    }
+}
+
+// Perform convolution in frequency domain for efficiency
+void frequency_domain_convolution(float input[HRTF_IR_LENGTH],
+                                 float ir[HRTF_IR_LENGTH],
+                                 inout float output[HRTF_IR_LENGTH]) {
+
+    vec2 input_spectrum[HRTF_IR_LENGTH];
+    vec2 ir_spectrum[HRTF_IR_LENGTH];
+    vec2 output_spectrum[HRTF_IR_LENGTH];
+
+    // Transform input and impulse response to frequency domain
+    fft_radix2(input, input_spectrum);
+    fft_radix2(ir, ir_spectrum);
+
+    // Multiply in frequency domain (convolution in time domain)
+    for (uint i = 0; i < HRTF_IR_LENGTH; ++i) {
+        output_spectrum[i] = complex_multiply(input_spectrum[i], ir_spectrum[i]);
+    }
+
+    // Transform back to time domain
+    ifft_radix2(output_spectrum, output);
+}
+
+// Apply frequency-dependent attenuation based on distance
+void apply_frequency_attenuation(inout float samples[HRTF_IR_LENGTH], float distance) {
+    vec2 spectrum[HRTF_IR_LENGTH];
+    fft_radix2(samples, spectrum);
+
+    // Apply frequency-dependent attenuation
+    for (uint i = 0; i < HRTF_IR_LENGTH / 2; ++i) {
+        float frequency = float(i) * push_constants.sample_rate / float(HRTF_IR_LENGTH);
+
+        // High-frequency attenuation due to air absorption
+        float air_absorption = exp(-0.0001 * frequency * distance);
+
+        // Low-frequency rolloff due to distance
+        float distance_factor = 1.0 / (1.0 + distance * 0.1);
+
+        float attenuation = air_absorption * distance_factor;
+        spectrum[i] = complex_multiply(spectrum[i], vec2(attenuation, 0.0));
+
+        // Mirror for negative frequencies
+        if (i > 0 && i < HRTF_IR_LENGTH / 2) {
+            spectrum[HRTF_IR_LENGTH - i] = vec2(spectrum[i].x, -spectrum[i].y);
+        }
+    }
+
+    ifft_radix2(spectrum, samples);
+}
+
+void main() {
+    uint source_idx = gl_GlobalInvocationID.x;
+
+    if (source_idx >= push_constants.num_sources || source_idx >= hrtf_data.length()) {
+        return;
+    }
+
+    HRTFConvolutionData data = hrtf_data[source_idx];
+
+    // Calculate spatial parameters
+    vec3 source_to_listener = data.listener_position - data.source_position;
+    data.distance = length(source_to_listener);
+
+    if (data.distance < 1e-6) {
+        // Source at listener position - bypass HRTF processing
+        for (uint i = 0; i < HRTF_IR_LENGTH; ++i) {
+            data.left_output[i] = data.input_samples[i] * 0.5;
+            data.right_output[i] = data.input_samples[i] * 0.5;
+        }
+        hrtf_data[source_idx] = data;
+        return;
+    }
+
+    // Normalize direction vector
+    vec3 direction = source_to_listener / data.distance;
+
+    // Calculate azimuth and elevation
+    vec3 listener_right = cross(data.listener_forward, data.listener_up);
+    data.azimuth = atan(dot(direction, listener_right), dot(direction, data.listener_forward));
+    data.elevation = asin(clamp(dot(direction, data.listener_up), -1.0, 1.0));
+
+    // Convert to degrees
+    float azimuth_deg = degrees(data.azimuth);
+    float elevation_deg = degrees(data.elevation);
+
+    // Get appropriate HRTF impulse responses
+    get_hrtf_ir(azimuth_deg, elevation_deg, data.left_hrtf_ir, data.right_hrtf_ir);
+
+    // Apply distance-based frequency attenuation to input
+    float processed_input[HRTF_IR_LENGTH];
+    for (uint i = 0; i < HRTF_IR_LENGTH; ++i) {
+        processed_input[i] = data.input_samples[i];
+    }
+    apply_frequency_attenuation(processed_input, data.distance);
+
+    // Perform HRTF convolution for each ear
+    frequency_domain_convolution(processed_input, data.left_hrtf_ir, data.left_output);
+    frequency_domain_convolution(processed_input, data.right_hrtf_ir, data.right_output);
+
+    // Apply inter-aural time difference (ITD)
+    float itd_samples = (data.head_radius * sin(data.azimuth)) / push_constants.sample_rate;
+    int itd_delay = int(abs(itd_samples));
+
+    if (itd_delay > 0 && itd_delay < int(HRTF_IR_LENGTH)) {
+        if (data.azimuth > 0) {
+            // Source on right - delay left ear
+            for (int i = int(HRTF_IR_LENGTH) - 1; i >= itd_delay; --i) {
+                data.left_output[i] = data.left_output[i - itd_delay];
+            }
+            for (int i = 0; i < itd_delay; ++i) {
+                data.left_output[i] = 0.0;
+            }
+        } else {
+            // Source on left - delay right ear
+            for (int i = int(HRTF_IR_LENGTH) - 1; i >= itd_delay; --i) {
+                data.right_output[i] = data.right_output[i - itd_delay];
+            }
+            for (int i = 0; i < itd_delay; ++i) {
+                data.right_output[i] = 0.0;
+            }
+        }
+    }
+
+    // Apply distance attenuation
+    float distance_attenuation = 1.0 / max(1.0, data.distance);
+    for (uint i = 0; i < HRTF_IR_LENGTH; ++i) {
+        data.left_output[i] *= distance_attenuation;
+        data.right_output[i] *= distance_attenuation;
+    }
+
+    // Write back processed data
+    hrtf_data[source_idx] = data;
+}
