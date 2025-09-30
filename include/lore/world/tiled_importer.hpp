@@ -14,7 +14,7 @@ struct TileCoord;
 // Parsed Tiled tile properties (custom properties set in Tiled editor)
 struct TiledTileProperties {
     std::string mesh_path;           // Path to 3D mesh (e.g., "meshes/wall_stone.obj")
-    int32_t height = 1;              // Vertical height in tiles (1-8 typical)
+    float height = 1.0f;             // Vertical height in meters (supports fractional values like 0.1)
     std::string collision_type = "box"; // "box", "sphere", "mesh", "none"
     uint32_t material_id = 0;        // PBR material index
     bool walkable = true;            // Can entities walk on this?

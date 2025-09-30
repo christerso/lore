@@ -85,7 +85,7 @@ TiledTileProperties TiledImporter::parse_tile_properties(const void* tile_json_p
             props.mesh_path = prop_map["mesh_path"];
         }
         if (prop_map.count("height")) {
-            props.height = std::stoi(prop_map["height"]);
+            props.height = std::stof(prop_map["height"]);
         }
         if (prop_map.count("collision_type")) {
             props.collision_type = prop_map["collision_type"];
@@ -331,7 +331,7 @@ std::vector<std::string> TiledImporter::validate_map(const TiledMap& tiled_map) 
         if (props.mesh_path.empty()) {
             errors.push_back("Tile GID " + std::to_string(gid) + " has no mesh_path defined");
         }
-        if (props.height <= 0 || props.height > 16) {
+        if (props.height <= 0.0f || props.height > 16.0f) {
             errors.push_back("Tile GID " + std::to_string(gid) + " has invalid height: " +
                             std::to_string(props.height));
         }
@@ -423,7 +423,7 @@ void TiledImporter::import_to_world(
                     TileDefinition def;
                     def.name = layer.name + "_tile_" + std::to_string(gid);
                     def.mesh_path = props.mesh_path;
-                    def.height_meters = static_cast<float>(props.height);
+                    def.height_meters = props.height; // Height in meters (supports fractional values)
                     def.collision_type = props.collision_type;
                     def.walkable = props.walkable;
                     def.material_id = props.material_id;
@@ -437,17 +437,16 @@ void TiledImporter::import_to_world(
                     gid_to_def_id[gid] = def_id;
                 }
 
-                // Spawn vertical stack of tiles based on height property
-                for (int32_t z = 0; z < props.height; z++) {
-                    TileCoord coord{
-                        x + static_cast<int32_t>(world_origin_x),
-                        y + static_cast<int32_t>(world_origin_y),
-                        layer.z_offset + z + static_cast<int32_t>(world_origin_z)
-                    };
+                // Place single tile at this coordinate
+                // Height is stored in the tile definition, not as vertical stacking
+                TileCoord coord{
+                    x + static_cast<int32_t>(world_origin_x),
+                    y + static_cast<int32_t>(world_origin_y),
+                    layer.z_offset + static_cast<int32_t>(world_origin_z)
+                };
 
-                    // Place tile in world
-                    world.set_tile(coord, def_id, 0.0f);
-                }
+                // Place tile in world
+                world.set_tile(coord, def_id, 0.0f);
             }
         }
     }

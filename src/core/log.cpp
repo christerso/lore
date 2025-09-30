@@ -41,9 +41,8 @@ namespace {
         // Enable UTF-8 output
         SetConsoleOutputCP(CP_UTF8);
 
-        // Set console to UTF-8 mode for proper Unicode display
-        _setmode(_fileno(stdout), _O_U8TEXT);
-        _setmode(_fileno(stderr), _O_U8TEXT);
+        // Note: Do NOT use _O_U8TEXT with std::cout - it requires wide character output
+        // SetConsoleOutputCP(CP_UTF8) is sufficient for UTF-8 support with narrow streams
 #endif
     }
 
