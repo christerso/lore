@@ -1,0 +1,188 @@
+#version 450
+
+/**
+ * Atmospheric Transmittance LUT Generation
+ *
+ * Precomputes transmittance (atmospheric absorption) for all view angles and altitudes.
+ * This LUT is used by other shaders to avoid expensive integrals every frame.
+ *
+ * Physics:
+ * Transmittance T(λ) = exp(-τ(λ))
+ * where τ(λ) is optical depth: integral(β_R(λ) + β_M + β_O(λ)) along ray path
+ *
+ * LUT Dimensions:
+ * X-axis (256): View zenith angle (0 = up, π/2 = horizon, π = down)
+ * Y-axis (64): Altitude above surface (0 to atmosphere_thickness_m)
+ *
+ * Output: RGB transmittance (0 = all absorbed, 1 = no absorption)
+ */
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+// Output transmittance LUT
+layout(binding = 0, rgba16f) uniform writeonly image2D transmittance_lut;
+
+// Atmospheric parameters (push constants for flexibility)
+layout(push_constant) uniform AtmosphericParams {
+    // Planet geometry
+    float planet_radius_m;
+    float atmosphere_thickness_m;
+
+    // Rayleigh scattering (RGB)
+    vec3 rayleigh_scattering_rgb;
+    float rayleigh_scale_height_m;
+    float rayleigh_density_multiplier;
+
+    // Mie scattering/extinction
+    float mie_extinction_coeff;
+    float mie_scale_height_m;
+
+    // Ozone absorption (RGB)
+    vec3 ozone_absorption_rgb;
+    float ozone_peak_altitude_m;
+    float ozone_layer_thickness_m;
+    float ozone_concentration_multiplier;
+
+    // Pollution
+    float pollution_density_kg_m3;
+
+    // Integration parameters
+    uint num_samples;  // Ray integration steps (typically 40)
+} params;
+
+/**
+ * Calculate density at given altitude using exponential profile
+ * density(h) = exp(-h / scale_height)
+ */
+float density_at_altitude(float altitude_m, float scale_height_m) {
+    return exp(-max(altitude_m, 0.0) / scale_height_m);
+}
+
+/**
+ * Calculate ozone density using Gaussian profile centered at peak altitude
+ */
+float ozone_density_at_altitude(float altitude_m) {
+    float altitude_diff = altitude_m - params.ozone_peak_altitude_m;
+    float sigma = params.ozone_layer_thickness_m / 2.355;  // FWHM to sigma
+    return exp(-(altitude_diff * altitude_diff) / (2.0 * sigma * sigma));
+}
+
+/**
+ * Ray-sphere intersection
+ * Returns distance to intersection, or negative if no intersection
+ */
+float ray_sphere_intersection(vec3 origin, vec3 direction, float radius) {
+    float a = dot(direction, direction);
+    float b = 2.0 * dot(origin, direction);
+    float c = dot(origin, origin) - radius * radius;
+    float discriminant = b * b - 4.0 * a * c;
+
+    if (discriminant < 0.0) {
+        return -1.0;
+    }
+
+    float sqrt_discriminant = sqrt(discriminant);
+    float t1 = (-b - sqrt_discriminant) / (2.0 * a);
+    float t2 = (-b + sqrt_discriminant) / (2.0 * a);
+
+    // Return first positive intersection
+    if (t1 > 0.0) return t1;
+    if (t2 > 0.0) return t2;
+    return -1.0;
+}
+
+/**
+ * Calculate optical depth (integral of extinction along ray)
+ * Returns RGB optical depth for wavelength-dependent effects
+ */
+vec3 calculate_optical_depth(float altitude_m, float view_zenith_angle_rad) {
+    // Ray origin at altitude
+    float r = params.planet_radius_m + altitude_m;
+    vec3 origin = vec3(0.0, r, 0.0);
+
+    // Ray direction based on zenith angle
+    float cos_zenith = cos(view_zenith_angle_rad);
+    float sin_zenith = sin(view_zenith_angle_rad);
+    vec3 direction = vec3(sin_zenith, cos_zenith, 0.0);
+
+    // Find intersection with atmosphere boundary
+    float atmosphere_radius = params.planet_radius_m + params.atmosphere_thickness_m;
+    float t_max = ray_sphere_intersection(origin, direction, atmosphere_radius);
+
+    // If looking down, also check ground intersection
+    if (cos_zenith < 0.0) {
+        float t_ground = ray_sphere_intersection(origin, direction, params.planet_radius_m);
+        if (t_ground > 0.0 && t_ground < t_max) {
+            t_max = t_ground;
+        }
+    }
+
+    if (t_max <= 0.0) {
+        return vec3(0.0);  // No intersection (shouldn't happen)
+    }
+
+    // Integrate extinction along ray
+    vec3 optical_depth = vec3(0.0);
+    float dt = t_max / float(params.num_samples);
+
+    for (uint i = 0; i < params.num_samples; ++i) {
+        float t = dt * (float(i) + 0.5);
+        vec3 sample_pos = origin + direction * t;
+        float sample_altitude = length(sample_pos) - params.planet_radius_m;
+
+        // Rayleigh extinction (wavelength-dependent)
+        float rayleigh_density = density_at_altitude(sample_altitude, params.rayleigh_scale_height_m);
+        vec3 rayleigh_extinction = params.rayleigh_scattering_rgb *
+                                   params.rayleigh_density_multiplier *
+                                   rayleigh_density;
+
+        // Mie extinction (less wavelength-dependent)
+        float mie_density = density_at_altitude(sample_altitude, params.mie_scale_height_m);
+        float mie_extinction = (params.mie_extinction_coeff +
+                                params.pollution_density_kg_m3 * 1000.0) *
+                               mie_density;
+
+        // Ozone absorption (wavelength-dependent)
+        float ozone_density = ozone_density_at_altitude(sample_altitude);
+        vec3 ozone_extinction = params.ozone_absorption_rgb *
+                                params.ozone_concentration_multiplier *
+                                ozone_density;
+
+        // Total extinction at this sample
+        vec3 total_extinction = rayleigh_extinction +
+                                vec3(mie_extinction) +
+                                ozone_extinction;
+
+        optical_depth += total_extinction * dt;
+    }
+
+    return optical_depth;
+}
+
+void main() {
+    ivec2 tex_coord = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 tex_size = imageSize(transmittance_lut);
+
+    if (tex_coord.x >= tex_size.x || tex_coord.y >= tex_size.y) {
+        return;
+    }
+
+    // Map texture coordinates to physical parameters
+    // X: View zenith angle (0 to π)
+    float u = (float(tex_coord.x) + 0.5) / float(tex_size.x);
+    float view_zenith_angle_rad = u * 3.14159265359;
+
+    // Y: Altitude (0 to atmosphere_thickness_m)
+    // Use non-linear mapping for better precision near ground
+    float v = (float(tex_coord.y) + 0.5) / float(tex_size.y);
+    float altitude_m = v * v * params.atmosphere_thickness_m;  // Quadratic for more samples near ground
+
+    // Calculate optical depth
+    vec3 optical_depth = calculate_optical_depth(altitude_m, view_zenith_angle_rad);
+
+    // Beer's law: T(λ) = exp(-τ(λ))
+    vec3 transmittance = exp(-optical_depth);
+
+    // Write to LUT
+    imageStore(transmittance_lut, tex_coord, vec4(transmittance, 1.0));
+}

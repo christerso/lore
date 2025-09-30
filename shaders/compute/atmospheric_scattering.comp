@@ -1,0 +1,243 @@
+#version 450
+
+/**
+ * Atmospheric Single Scattering LUT Generation
+ *
+ * Precomputes single scattering (sky color) for all view directions, sun positions, and altitudes.
+ * Integrates in-scattering along view rays.
+ *
+ * Physics:
+ * L_s(λ) = integral( T(x,x_0) * β(λ) * P(θ) * L_sun(λ) * T(x,sun) ) dx
+ * where:
+ * - T = transmittance (from LUT)
+ * - β = scattering coefficient (Rayleigh + Mie)
+ * - P(θ) = phase function (angle between view and sun)
+ * - L_sun = sun intensity
+ *
+ * LUT Dimensions:
+ * X-axis (200): View zenith angle (0 to π)
+ * Y-axis (128): Sun zenith angle (0 to π)
+ * Z-axis (32): Altitude (0 to atmosphere_thickness_m)
+ *
+ * Output: RGB scattering intensity
+ */
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 2) in;
+
+// Input transmittance LUT
+layout(binding = 0) uniform sampler2D transmittance_lut;
+
+// Output scattering LUT (3D texture)
+layout(binding = 1, rgba16f) uniform writeonly image3D scattering_lut;
+
+layout(push_constant) uniform AtmosphericParams {
+    // Planet geometry
+    float planet_radius_m;
+    float atmosphere_thickness_m;
+
+    // Rayleigh scattering
+    vec3 rayleigh_scattering_rgb;
+    float rayleigh_scale_height_m;
+    float rayleigh_density_multiplier;
+
+    // Mie scattering
+    float mie_scattering_coeff;
+    float mie_scale_height_m;
+    float mie_phase_g;  // Asymmetry factor
+
+    // Ozone (not used for scattering, only absorption)
+    float _pad0;
+
+    // Sun
+    vec3 sun_base_color_rgb;
+    float sun_intensity_w_m2;
+
+    // Pollution
+    float pollution_density_kg_m3;
+    vec3 pollution_color_tint;
+
+    // Integration
+    uint num_samples;  // Ray integration steps (typically 40)
+} params;
+
+// Rayleigh phase function
+// P_R(θ) = 3/(16π) * (1 + cos²θ)
+float rayleigh_phase(float cos_theta) {
+    return 0.0596831 * (1.0 + cos_theta * cos_theta);  // 3/(16π) ≈ 0.0596831
+}
+
+// Henyey-Greenstein phase function (for Mie scattering)
+// P_M(θ) = (1 - g²) / (4π (1 + g² - 2g cos θ)^(3/2))
+float mie_phase(float cos_theta, float g) {
+    float g2 = g * g;
+    float denom = 1.0 + g2 - 2.0 * g * cos_theta;
+    return (1.0 - g2) / (12.566370614 * pow(denom, 1.5));  // 4π ≈ 12.566370614
+}
+
+// Density at altitude (exponential profile)
+float density_at_altitude(float altitude_m, float scale_height_m) {
+    return exp(-max(altitude_m, 0.0) / scale_height_m);
+}
+
+// Sample transmittance LUT
+vec3 sample_transmittance(float altitude_m, float view_zenith_angle_rad) {
+    // Map altitude to v coordinate (quadratic, same as generation)
+    float v = sqrt(altitude_m / params.atmosphere_thickness_m);
+
+    // Map zenith angle to u coordinate
+    float u = view_zenith_angle_rad / 3.14159265359;
+
+    return texture(transmittance_lut, vec2(u, v)).rgb;
+}
+
+// Ray-sphere intersection
+float ray_sphere_intersection(vec3 origin, vec3 direction, float radius) {
+    float a = dot(direction, direction);
+    float b = 2.0 * dot(origin, direction);
+    float c = dot(origin, origin) - radius * radius;
+    float discriminant = b * b - 4.0 * a * c;
+
+    if (discriminant < 0.0) return -1.0;
+
+    float sqrt_discriminant = sqrt(discriminant);
+    float t1 = (-b - sqrt_discriminant) / (2.0 * a);
+    float t2 = (-b + sqrt_discriminant) / (2.0 * a);
+
+    if (t1 > 0.0) return t1;
+    if (t2 > 0.0) return t2;
+    return -1.0;
+}
+
+// Calculate single scattering along view ray
+vec3 calculate_single_scattering(
+    float altitude_m,
+    float view_zenith_angle_rad,
+    float sun_zenith_angle_rad
+) {
+    // Setup ray
+    float r = params.planet_radius_m + altitude_m;
+    vec3 origin = vec3(0.0, r, 0.0);
+
+    // View direction
+    float cos_view = cos(view_zenith_angle_rad);
+    float sin_view = sin(view_zenith_angle_rad);
+    vec3 view_dir = vec3(sin_view, cos_view, 0.0);
+
+    // Sun direction
+    float cos_sun = cos(sun_zenith_angle_rad);
+    float sin_sun = sin(sun_zenith_angle_rad);
+    vec3 sun_dir = vec3(sin_sun, cos_sun, 0.0);
+
+    // Angle between view and sun (for phase function)
+    float cos_theta = dot(view_dir, sun_dir);
+
+    // Find ray intersection with atmosphere
+    float atmosphere_radius = params.planet_radius_m + params.atmosphere_thickness_m;
+    float t_max = ray_sphere_intersection(origin, view_dir, atmosphere_radius);
+
+    // Check ground intersection
+    if (cos_view < 0.0) {
+        float t_ground = ray_sphere_intersection(origin, view_dir, params.planet_radius_m);
+        if (t_ground > 0.0 && t_ground < t_max) {
+            t_max = t_ground;
+        }
+    }
+
+    if (t_max <= 0.0) {
+        return vec3(0.0);
+    }
+
+    // Integrate scattering along ray
+    vec3 scattering = vec3(0.0);
+    float dt = t_max / float(params.num_samples);
+
+    for (uint i = 0; i < params.num_samples; ++i) {
+        float t = dt * (float(i) + 0.5);
+        vec3 sample_pos = origin + view_dir * t;
+        float sample_altitude = length(sample_pos) - params.planet_radius_m;
+
+        // Rayleigh scattering
+        float rayleigh_density = density_at_altitude(sample_altitude, params.rayleigh_scale_height_m);
+        vec3 rayleigh_scatter = params.rayleigh_scattering_rgb *
+                                params.rayleigh_density_multiplier *
+                                rayleigh_density;
+
+        // Mie scattering
+        float mie_density = density_at_altitude(sample_altitude, params.mie_scale_height_m);
+        float mie_scatter = (params.mie_scattering_coeff +
+                             params.pollution_density_kg_m3 * 1000.0 * 0.9) *
+                            mie_density;
+
+        // Total scattering at this point
+        vec3 total_scatter = rayleigh_scatter + vec3(mie_scatter);
+
+        // Phase functions
+        float phase_rayleigh = rayleigh_phase(cos_theta);
+        float phase_mie = mie_phase(cos_theta, params.mie_phase_g);
+
+        // Transmittance from sample point to viewer (we're already traveling along this ray)
+        // Approximate as 1.0 for simplicity (already accounted for in outer integral)
+        vec3 transmittance_to_viewer = vec3(1.0);
+
+        // Transmittance from sample point to sun
+        vec3 sample_to_sun_dir = sun_dir;
+        float sun_zenith_at_sample = acos(dot(normalize(sample_pos), sample_to_sun_dir));
+        vec3 transmittance_to_sun = sample_transmittance(sample_altitude, sun_zenith_at_sample);
+
+        // In-scattering contribution
+        vec3 rayleigh_contrib = rayleigh_scatter * phase_rayleigh;
+        float mie_contrib = mie_scatter * phase_mie;
+
+        // Combine with sun light and transmittance
+        vec3 sun_light = params.sun_base_color_rgb * (params.sun_intensity_w_m2 / 1361.0);
+
+        scattering += (rayleigh_contrib + vec3(mie_contrib)) *
+                      sun_light *
+                      transmittance_to_sun *
+                      transmittance_to_viewer *
+                      dt;
+    }
+
+    // Apply pollution tint to Mie scattering
+    if (params.pollution_density_kg_m3 > 0.0) {
+        float pollution_factor = min(params.pollution_density_kg_m3 * 3000.0, 0.5);
+        scattering = scattering * (1.0 - pollution_factor) +
+                     (scattering * params.pollution_color_tint) * pollution_factor;
+    }
+
+    return scattering;
+}
+
+void main() {
+    ivec3 tex_coord = ivec3(gl_GlobalInvocationID.xyz);
+    ivec3 tex_size = imageSize(scattering_lut);
+
+    if (tex_coord.x >= tex_size.x ||
+        tex_coord.y >= tex_size.y ||
+        tex_coord.z >= tex_size.z) {
+        return;
+    }
+
+    // Map texture coordinates to physical parameters
+    // X: View zenith angle (0 to π)
+    float u_view = (float(tex_coord.x) + 0.5) / float(tex_size.x);
+    float view_zenith_angle_rad = u_view * 3.14159265359;
+
+    // Y: Sun zenith angle (0 to π)
+    float u_sun = (float(tex_coord.y) + 0.5) / float(tex_size.y);
+    float sun_zenith_angle_rad = u_sun * 3.14159265359;
+
+    // Z: Altitude (quadratic distribution for precision near ground)
+    float w = (float(tex_coord.z) + 0.5) / float(tex_size.z);
+    float altitude_m = w * w * params.atmosphere_thickness_m;
+
+    // Calculate single scattering
+    vec3 scattering = calculate_single_scattering(
+        altitude_m,
+        view_zenith_angle_rad,
+        sun_zenith_angle_rad
+    );
+
+    // Write to LUT
+    imageStore(scattering_lut, tex_coord, vec4(scattering, 1.0));
+}

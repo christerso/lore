@@ -1,0 +1,299 @@
+#version 450
+
+/**
+ * Atmospheric Effects Application
+ *
+ * Applies precomputed atmospheric scattering to rendered scene.
+ * This runs every frame and combines:
+ * - Scene color (from previous render pass)
+ * - Atmospheric scattering (sky color)
+ * - Aerial perspective (distant objects fade to sky)
+ * - Distance fog
+ * - Volumetric god rays (optional)
+ *
+ * Input: HDR scene color + depth
+ * Output: Scene with atmospheric effects
+ */
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+// Input scene color (HDR)
+layout(binding = 0) uniform sampler2D scene_color;
+
+// Input depth buffer
+layout(binding = 1) uniform sampler2D scene_depth;
+
+// Precomputed transmittance LUT
+layout(binding = 2) uniform sampler2D transmittance_lut;
+
+// Precomputed scattering LUT
+layout(binding = 3) uniform sampler3D scattering_lut;
+
+// Output final color
+layout(binding = 4, rgba16f) uniform image2D output_color;
+
+layout(push_constant) uniform RenderParams {
+    // Camera
+    mat4 inv_view_proj;  // Inverse view-projection matrix
+    vec3 camera_position_world;
+    float camera_altitude_m;
+
+    // Sun/Moon
+    vec3 sun_direction;
+    float sun_intensity;
+    vec3 sun_color_rgb;
+    float _pad0;
+
+    // Atmosphere geometry
+    float planet_radius_m;
+    float atmosphere_thickness_m;
+
+    // Fog
+    float fog_density;
+    float fog_start_distance_m;
+    float fog_height_falloff_m;
+    vec3 fog_color_override_rgb;
+
+    // Aerial perspective
+    float aerial_perspective_distance_m;
+    float enable_aerial_perspective;
+
+    // Volumetric lighting
+    float volumetric_intensity;
+    float volumetric_noise_scale;
+    uint volumetric_samples;
+    float enable_volumetric_lighting;
+
+    // Cloud coverage
+    float cloud_coverage;
+    float cloud_opacity;
+
+    // Screen
+    vec2 screen_size;
+} params;
+
+// Simple 3D noise for volumetric detail
+float noise3d(vec3 p) {
+    vec3 i = floor(p);
+    vec3 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+
+    float n = i.x + i.y * 57.0 + i.z * 113.0;
+    return mix(
+        mix(
+            mix(fract(sin(n) * 43758.5453), fract(sin(n + 1.0) * 43758.5453), f.x),
+            mix(fract(sin(n + 57.0) * 43758.5453), fract(sin(n + 58.0) * 43758.5453), f.x),
+            f.y
+        ),
+        mix(
+            mix(fract(sin(n + 113.0) * 43758.5453), fract(sin(n + 114.0) * 43758.5453), f.x),
+            mix(fract(sin(n + 170.0) * 43758.5453), fract(sin(n + 171.0) * 43758.5453), f.x),
+            f.y
+        ),
+        f.z
+    );
+}
+
+// Reconstruct world position from depth
+vec3 world_position_from_depth(vec2 tex_coord, float depth) {
+    // NDC coordinates
+    vec4 ndc = vec4(
+        tex_coord.x * 2.0 - 1.0,
+        tex_coord.y * 2.0 - 1.0,
+        depth * 2.0 - 1.0,
+        1.0
+    );
+
+    // World space
+    vec4 world = params.inv_view_proj * ndc;
+    return world.xyz / world.w;
+}
+
+// Sample scattering LUT
+vec3 sample_scattering(float altitude_m, float view_zenith_rad, float sun_zenith_rad) {
+    // Map to texture coordinates
+    float u_view = view_zenith_rad / 3.14159265359;
+    float u_sun = sun_zenith_rad / 3.14159265359;
+    float w = sqrt(altitude_m / params.atmosphere_thickness_m);  // Quadratic mapping
+
+    vec3 scattering = texture(scattering_lut, vec3(u_view, u_sun, w)).rgb;
+    return max(scattering, vec3(0.0));
+}
+
+// Sample transmittance LUT
+vec3 sample_transmittance(float altitude_m, float view_zenith_rad) {
+    float u = view_zenith_rad / 3.14159265359;
+    float v = sqrt(altitude_m / params.atmosphere_thickness_m);
+
+    return texture(transmittance_lut, vec2(u, v)).rgb;
+}
+
+// Calculate exponential height fog
+float calculate_height_fog(float distance_m, float start_altitude_m, float end_altitude_m) {
+    float avg_altitude = (start_altitude_m + end_altitude_m) * 0.5;
+    float height_factor = exp(-avg_altitude / params.fog_height_falloff_m);
+
+    float distance_in_fog = max(distance_m - params.fog_start_distance_m, 0.0);
+    float fog_amount = 1.0 - exp(-params.fog_density * distance_in_fog * height_factor);
+
+    return clamp(fog_amount, 0.0, 1.0);
+}
+
+// Volumetric god rays raymarch
+vec3 calculate_volumetric_lighting(vec3 ray_start, vec3 ray_end, vec3 sun_dir) {
+    if (params.enable_volumetric_lighting < 0.5) {
+        return vec3(0.0);
+    }
+
+    vec3 ray_dir = ray_end - ray_start;
+    float ray_length = length(ray_dir);
+    ray_dir /= ray_length;
+
+    float step_size = ray_length / float(params.volumetric_samples);
+    vec3 step_vec = ray_dir * step_size;
+
+    vec3 volumetric_light = vec3(0.0);
+    float light_dot = max(dot(ray_dir, sun_dir), 0.0);
+    float phase = 0.0596831 * (1.0 + light_dot * light_dot);  // Rayleigh phase
+
+    for (uint i = 0; i < params.volumetric_samples; ++i) {
+        vec3 sample_pos = ray_start + step_vec * (float(i) + 0.5);
+        float sample_altitude = length(sample_pos) - params.planet_radius_m;
+
+        if (sample_altitude < 0.0 || sample_altitude > params.atmosphere_thickness_m) {
+            continue;
+        }
+
+        // Sample atmospheric density (exponential falloff)
+        float density = exp(-sample_altitude / 8500.0);  // Rayleigh scale height
+
+        // Add noise detail
+        float noise_value = noise3d(sample_pos * params.volumetric_noise_scale * 0.0001);
+        density *= (0.7 + 0.3 * noise_value);
+
+        // Transmittance from sample to sun
+        vec3 to_sun = normalize(sun_dir);
+        float sun_zenith = acos(clamp(dot(normalize(sample_pos), to_sun), -1.0, 1.0));
+        vec3 transmittance = sample_transmittance(sample_altitude, sun_zenith);
+
+        // In-scattering contribution
+        volumetric_light += params.sun_color_rgb * transmittance * density * phase * step_size;
+    }
+
+    return volumetric_light * params.volumetric_intensity;
+}
+
+void main() {
+    ivec2 pixel_coord = ivec2(gl_GlobalInvocationID.xy);
+
+    if (pixel_coord.x >= int(params.screen_size.x) ||
+        pixel_coord.y >= int(params.screen_size.y)) {
+        return;
+    }
+
+    // Sample scene
+    vec2 tex_coord = (vec2(pixel_coord) + 0.5) / params.screen_size;
+    vec3 scene_color = texture(scene_color, tex_coord).rgb;
+    float depth = texture(scene_depth, tex_coord).r;
+
+    // Handle skybox (depth = 1.0)
+    if (depth >= 0.9999) {
+        // Pure sky - sample scattering LUT directly
+        vec3 world_pos = world_position_from_depth(tex_coord, depth);
+        vec3 view_dir = normalize(world_pos - params.camera_position_world);
+
+        float view_zenith = acos(clamp(view_dir.y, -1.0, 1.0));
+        float sun_zenith = acos(clamp(params.sun_direction.y, -1.0, 1.0));
+
+        vec3 sky_color = sample_scattering(
+            params.camera_altitude_m,
+            view_zenith,
+            sun_zenith
+        );
+
+        // Add sun disk
+        float sun_dot = dot(view_dir, params.sun_direction);
+        if (sun_dot > 0.9995) {  // ~1.8° diameter
+            float sun_intensity = smoothstep(0.9995, 0.9998, sun_dot);
+            sky_color += params.sun_color_rgb * params.sun_intensity * sun_intensity * 0.1;
+        }
+
+        // Apply cloud coverage
+        if (params.cloud_coverage > 0.01) {
+            float cloud_noise = noise3d(view_dir * 10.0);
+            float cloud_factor = smoothstep(1.0 - params.cloud_coverage, 1.0, cloud_noise);
+            vec3 cloud_color = vec3(0.8, 0.8, 0.85) * params.sun_color_rgb;
+            sky_color = mix(sky_color, cloud_color, cloud_factor * params.cloud_opacity);
+        }
+
+        imageStore(output_color, pixel_coord, vec4(sky_color, 1.0));
+        return;
+    }
+
+    // Scene object - apply atmospheric effects
+    vec3 world_pos = world_position_from_depth(tex_coord, depth);
+    vec3 view_dir = normalize(world_pos - params.camera_position_world);
+    float distance = length(world_pos - params.camera_position_world);
+
+    vec3 final_color = scene_color;
+
+    // Aerial perspective (objects fade to sky color with distance)
+    if (params.enable_aerial_perspective > 0.5 && distance > 10.0) {
+        float view_zenith = acos(clamp(view_dir.y, -1.0, 1.0));
+        float sun_zenith = acos(clamp(params.sun_direction.y, -1.0, 1.0));
+
+        vec3 sky_color = sample_scattering(
+            params.camera_altitude_m,
+            view_zenith,
+            sun_zenith
+        );
+
+        // Fade to sky color based on distance
+        float aerial_factor = 1.0 - exp(-distance / params.aerial_perspective_distance_m);
+        aerial_factor = clamp(aerial_factor, 0.0, 1.0);
+
+        final_color = mix(final_color, sky_color, aerial_factor);
+    }
+
+    // Distance fog
+    if (params.fog_density > 0.0) {
+        float object_altitude = world_pos.y;  // Assuming y is up
+        float fog_amount = calculate_height_fog(distance, params.camera_altitude_m, object_altitude);
+
+        vec3 fog_color;
+        if (length(params.fog_color_override_rgb) > 0.01) {
+            fog_color = params.fog_color_override_rgb;
+        } else {
+            // Use sky color as fog color
+            float view_zenith = acos(clamp(view_dir.y, -1.0, 1.0));
+            float sun_zenith = acos(clamp(params.sun_direction.y, -1.0, 1.0));
+            fog_color = sample_scattering(params.camera_altitude_m, view_zenith, sun_zenith);
+        }
+
+        final_color = mix(final_color, fog_color, fog_amount);
+    }
+
+    // Volumetric god rays
+    if (params.enable_volumetric_lighting > 0.5) {
+        vec3 ray_start = params.camera_position_world;
+        vec3 ray_end = world_pos;
+
+        // Limit raymarch distance for performance
+        float max_raymarch_distance = 1000.0;
+        if (distance > max_raymarch_distance) {
+            ray_end = ray_start + view_dir * max_raymarch_distance;
+        }
+
+        vec3 volumetric_light = calculate_volumetric_lighting(
+            ray_start,
+            ray_end,
+            params.sun_direction
+        );
+
+        // Additive blend
+        final_color += volumetric_light;
+    }
+
+    // Write final color
+    imageStore(output_color, pixel_coord, vec4(final_color, 1.0));
+}
