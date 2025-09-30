@@ -78,6 +78,106 @@ vision_system.set_environment(env);
 
 ---
 
+## World Systems
+
+### Tilemap World System with Instancing and Destruction
+
+**Location**: `lore/world/tilemap_world_system.hpp`, `lore/world/tiled_importer.hpp`
+
+**Purpose**: 3D tile-based world with efficient mesh instancing, dynamic destruction, and voxel simulation integration.
+
+**Tick Rate**: Varies by subsystem
+- Tile management: On-demand (add/remove tiles)
+- Destruction: Event-driven (damage events)
+- Voxel simulation: Per-frame (60Hz for fluids)
+
+**Architecture**:
+- **TileDefinition**: Immutable shared properties (mesh, material, physics)
+- **TileInstance**: Per-tile runtime state (position, rotation, health)
+- **TileChunk**: Spatial partition (16×16×16 tiles) for culling
+
+**Key Features**:
+- ✅ Mesh instancing - single mesh shared by 1000+ tiles
+- ✅ Progressive destruction - intact → damaged → fractured → broken
+- ✅ Voxel debris - broken tiles become 512 physics-simulated pieces
+- ✅ Fluid integration - liquid/smoke flows through broken tiles
+- ✅ Chunk-based streaming - infinite worlds with dynamic loading
+
+**Performance**:
+- **Intact tiles**: 2 draw calls for entire room (Cube + FloorTile)
+- **Broken tiles**: 1 draw call each (unique geometry)
+- **Memory**: 64 bytes per intact tile, ~100KB per broken tile
+- **Recommended**: 100K+ intact tiles, <1000 broken tiles
+
+**Destruction States**:
+```cpp
+enum class TileState {
+    Intact,      // Shared mesh, normal rendering
+    Damaged,     // Crack decals, 60-100% health
+    Fractured,   // Breaking animation, 30-60% health
+    Broken,      // Unique voxel debris, 0-30% health
+    Debris       // Physics-simulated pieces
+};
+```
+
+**Dependencies**:
+- **Requires**: `TileMeshCache` (mesh resource management)
+- **Requires**: `VoxelFluidSimulation` (liquid/smoke sim)
+- **Integrates With**: Physics system (debris), rendering, vision system
+
+**Update Order**:
+1. `TileDestructionSystem` (processes damage events)
+2. `VoxelFluidSimulation` (updates fluid flow)
+3. `TilemapWorldSystem` (updates tile states)
+4. `VisionSystem` (recalculates occlusion)
+
+**Documentation**: See `docs/systems/TILE_INSTANCING_AND_DESTRUCTION.md` for complete architecture
+
+**Example Usage**:
+```cpp
+// Load Tiled map with shared meshes
+auto tiled_map = TiledImporter::load_tiled_map("assets/maps/test_room.tmj");
+TiledImporter::import_to_world(world_system, tiled_map, 0.0f, 0.0f, 0.0f);
+
+// Damage tile (progressive destruction)
+auto* tile = world_system.get_tile_mutable({5, 5, 0});
+destruction_system.damage_tile(*tile, 0.4f);  // 40% damage
+
+// Check if broken (for fluid simulation)
+if (tile->state == TileState::Broken) {
+    voxel_simulation.on_tile_broken(tile->coord, tile->broken_geometry->voxel_pieces);
+}
+
+// Efficient rendering (instanced)
+tile_renderer.render_tiles(world_system);  // 2 draw calls for 121 tiles
+```
+
+**Mesh Instancing Pipeline**:
+```cpp
+// Renderer groups tiles by mesh
+std::unordered_map<uint32_t, std::vector<TileInstanceGPU>> instances_by_mesh;
+
+// Single draw call per mesh type
+for (const auto& [mesh_id, instances] : instances_by_mesh) {
+    vkCmdDrawIndexedIndirect(cmd, mesh, instances.size());  // GPU instancing
+}
+```
+
+**Configuration**:
+```cpp
+// Chunk size for spatial partitioning
+TilemapWorldSystem::CHUNK_SIZE = 16;  // 16×16×16 tiles
+
+// Voxel resolution for broken tiles
+VoxelFluidSimulation::VOXELS_PER_TILE = 8;  // 8×8×8 = 512 voxels
+
+// Destruction parameters
+destruction_system.set_voxelization_resolution(8);
+destruction_system.set_debris_lifetime(30.0f);  // seconds
+```
+
+---
+
 ## Physics Systems
 
 ### Physics-Based Entity System
