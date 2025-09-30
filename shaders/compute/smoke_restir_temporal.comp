@@ -1,0 +1,93 @@
+#version 450
+
+/**
+ * ReSTIR Temporal Resampling for Smoke
+ *
+ * Temporal pass: Reuse previous frame's reservoir for temporal stability
+ * and quality improvement.
+ *
+ * Combines current frame's direct sampling with previous frame's reservoir
+ * using motion vectors for reprojection.
+ */
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
+
+// Current frame density
+layout(binding = 0) uniform sampler3D density;
+
+// Spatial reservoirs (from spatial pass)
+layout(binding = 1) uniform sampler3D spatial_reservoirs;
+
+// Previous frame temporal reservoirs
+layout(binding = 2) uniform sampler3D temporal_reservoirs_prev;
+
+// Velocity (for reprojection)
+layout(binding = 3) uniform sampler3D velocity;
+
+// Output temporal reservoirs
+layout(binding = 4, rgba32f) uniform image3D temporal_reservoirs_out;
+
+layout(push_constant) uniform ReSTIRTemporalParams {
+    uint num_temporal_samples;  // Typically 16
+    float temporal_alpha;       // Blending factor (0.8-0.95)
+    float cell_size_m;
+    float delta_time_s;
+    uvec3 resolution;
+    uint frame_number;
+} params;
+
+vec3 reproject_voxel(ivec3 coord, vec3 velocity_value) {
+    // Reproject voxel to previous frame position using velocity
+    vec3 prev_pos = vec3(coord) - velocity_value * (params.delta_time_s / params.cell_size_m);
+    return prev_pos;
+}
+
+void main() {
+    ivec3 coord = ivec3(gl_GlobalInvocationID.xyz);
+
+    if (coord.x >= int(params.resolution.x) ||
+        coord.y >= int(params.resolution.y) ||
+        coord.z >= int(params.resolution.z)) {
+        return;
+    }
+
+    vec3 texel_size = 1.0 / vec3(params.resolution);
+    vec3 uv = (vec3(coord) + 0.5) * texel_size;
+
+    // Current density
+    float center_density = texture(density, uv).r;
+
+    if (center_density < 0.001) {
+        // Empty, store zero
+        imageStore(temporal_reservoirs_out, coord, vec4(0));
+        return;
+    }
+
+    // Current spatial reservoir
+    vec4 spatial_res = texture(spatial_reservoirs, uv);
+
+    // Reproject to previous frame
+    vec3 velocity_value = texture(velocity, uv).rgb;
+    vec3 prev_pos = reproject_voxel(coord, velocity_value);
+
+    // Check if previous position is in bounds
+    vec3 prev_uv = (prev_pos + 0.5) * texel_size;
+    if (prev_uv.x < 0.0 || prev_uv.x > 1.0 ||
+        prev_uv.y < 0.0 || prev_uv.y > 1.0 ||
+        prev_uv.z < 0.0 || prev_uv.z > 1.0) {
+        // Out of bounds, use only spatial
+        imageStore(temporal_reservoirs_out, coord, spatial_res);
+        return;
+    }
+
+    // Sample previous temporal reservoir
+    vec4 temporal_res_prev = texture(temporal_reservoirs_prev, prev_uv);
+
+    // Blend spatial and temporal reservoirs
+    // Temporal provides stability, spatial provides fresh samples
+    vec3 combined_light = mix(spatial_res.rgb, temporal_res_prev.rgb, params.temporal_alpha);
+    float combined_weight = mix(spatial_res.a, temporal_res_prev.a, params.temporal_alpha);
+
+    // Store combined temporal reservoir
+    imageStore(temporal_reservoirs_out, coord, vec4(combined_light, combined_weight));
+}

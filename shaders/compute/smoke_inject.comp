@@ -1,0 +1,80 @@
+#version 450
+
+/**
+ * Smoke Injection Shader
+ *
+ * Injects smoke at specified source position.
+ * Used for fire sources, explosions, smoke emitters.
+ *
+ * Gaussian falloff for smooth injection.
+ */
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
+
+// Input/Output density
+layout(binding = 0) uniform sampler3D density_in;
+layout(binding = 1, r32f) uniform image3D density_out;
+
+// Input/Output temperature
+layout(binding = 2) uniform sampler3D temperature_in;
+layout(binding = 3, r32f) uniform image3D temperature_out;
+
+// Input/Output velocity
+layout(binding = 4) uniform sampler3D velocity_in;
+layout(binding = 5, rgba32f) uniform image3D velocity_out;
+
+layout(push_constant) uniform InjectParams {
+    vec3 source_position;    // World position
+    float source_radius;     // Injection radius (m)
+    float density_injection; // Density to add
+    float temperature_k;     // Temperature to inject
+    vec3 velocity_injection; // Velocity to inject
+    float _pad;
+    vec3 volume_origin;      // Volume world position
+    float cell_size_m;
+    uvec3 resolution;
+} params;
+
+void main() {
+    ivec3 coord = ivec3(gl_GlobalInvocationID.xyz);
+
+    if (coord.x >= int(params.resolution.x) ||
+        coord.y >= int(params.resolution.y) ||
+        coord.z >= int(params.resolution.z)) {
+        return;
+    }
+
+    vec3 texel_size = 1.0 / vec3(params.resolution);
+    vec3 uv = (vec3(coord) + 0.5) * texel_size;
+
+    // Cell world position
+    vec3 cell_world_pos = params.volume_origin + vec3(coord) * params.cell_size_m;
+
+    // Distance from source
+    float distance = length(cell_world_pos - params.source_position);
+
+    // Gaussian falloff
+    float falloff = exp(-(distance * distance) / (params.source_radius * params.source_radius));
+
+    if (falloff < 0.01) {
+        // Too far, skip
+        return;
+    }
+
+    // Sample current values
+    float density = texture(density_in, uv).r;
+    float temperature = texture(temperature_in, uv).r;
+    vec3 velocity = texture(velocity_in, uv).rgb;
+
+    // Inject with falloff
+    float new_density = density + params.density_injection * falloff;
+    float new_temperature = max(temperature, params.temperature_k * falloff);
+    vec3 new_velocity = mix(velocity, params.velocity_injection, falloff * 0.8);
+
+    // Clamp density
+    new_density = clamp(new_density, 0.0, 10.0);  // Max density 10 kg/m³
+
+    imageStore(density_out, coord, vec4(new_density, 0, 0, 0));
+    imageStore(temperature_out, coord, vec4(new_temperature, 0, 0, 0));
+    imageStore(velocity_out, coord, vec4(new_velocity, 0));
+}

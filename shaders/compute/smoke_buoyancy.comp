@@ -1,0 +1,58 @@
+#version 450
+
+/**
+ * Smoke Buoyancy Shader
+ *
+ * Hot smoke rises due to buoyancy force.
+ * Advects velocity field based on temperature.
+ *
+ * Physics: F_buoyancy = (T - T_ambient) * α * (-g)
+ * where α = thermal expansion coefficient, g = gravity vector
+ */
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
+
+// Input temperature
+layout(binding = 0) uniform sampler3D temperature_in;
+
+// Input velocity (read)
+layout(binding = 1) uniform sampler3D velocity_in;
+
+// Output velocity (write)
+layout(binding = 2, rgba32f) uniform writeonly image3D velocity_out;
+
+layout(push_constant) uniform BuoyancyParams {
+    float buoyancy_strength;     // Buoyancy coefficient
+    float ambient_temperature_k; // Ambient temperature (K)
+    float delta_time_s;
+    float cell_size_m;
+    vec3 gravity_direction;      // Normalized (usually {0, -1, 0})
+    float _pad;
+    uvec3 resolution;
+} params;
+
+void main() {
+    ivec3 coord = ivec3(gl_GlobalInvocationID.xyz);
+
+    if (coord.x >= int(params.resolution.x) ||
+        coord.y >= int(params.resolution.y) ||
+        coord.z >= int(params.resolution.z)) {
+        return;
+    }
+
+    vec3 texel_size = 1.0 / vec3(params.resolution);
+    vec3 uv = (vec3(coord) + 0.5) * texel_size;
+
+    // Sample current temperature and velocity
+    float temperature = texture(temperature_in, uv).r;
+    vec3 velocity = texture(velocity_in, uv).rgb;
+
+    // Buoyancy force
+    float temp_diff = temperature - params.ambient_temperature_k;
+    vec3 buoyancy_force = temp_diff * params.buoyancy_strength * (-params.gravity_direction);
+
+    // Apply buoyancy to velocity
+    vec3 new_velocity = velocity + buoyancy_force * params.delta_time_s;
+
+    imageStore(velocity_out, coord, vec4(new_velocity, 0));
+}

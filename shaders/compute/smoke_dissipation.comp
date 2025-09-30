@@ -1,0 +1,62 @@
+#version 450
+
+/**
+ * Smoke Dissipation Shader
+ *
+ * Smoke density and temperature decrease over time.
+ * Exponential decay model.
+ *
+ * Physics: ρ(t) = ρ₀ * exp(-k*t)
+ * where k = dissipation rate
+ */
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
+
+// Input/Output density
+layout(binding = 0) uniform sampler3D density_in;
+layout(binding = 1, r32f) uniform writeonly image3D density_out;
+
+// Input/Output temperature
+layout(binding = 2) uniform sampler3D temperature_in;
+layout(binding = 3, r32f) uniform writeonly image3D temperature_out;
+
+layout(push_constant) uniform DissipationParams {
+    float dissipation_rate;      // Exponential decay rate (0-1)
+    float temperature_cooling_rate; // K/s
+    float ambient_temperature_k;
+    float delta_time_s;
+    uvec3 resolution;
+} params;
+
+void main() {
+    ivec3 coord = ivec3(gl_GlobalInvocationID.xyz);
+
+    if (coord.x >= int(params.resolution.x) ||
+        coord.y >= int(params.resolution.y) ||
+        coord.z >= int(params.resolution.z)) {
+        return;
+    }
+
+    vec3 texel_size = 1.0 / vec3(params.resolution);
+    vec3 uv = (vec3(coord) + 0.5) * texel_size;
+
+    // Sample current values
+    float density = texture(density_in, uv).r;
+    float temperature = texture(temperature_in, uv).r;
+
+    // Exponential dissipation
+    float dissipation_factor = pow(params.dissipation_rate, params.delta_time_s);
+    float new_density = density * dissipation_factor;
+
+    // Temperature cooling toward ambient
+    float temp_diff = temperature - params.ambient_temperature_k;
+    float cooling = params.temperature_cooling_rate * params.delta_time_s;
+    float new_temperature = temperature - sign(temp_diff) * min(abs(temp_diff), cooling);
+
+    // Clamp
+    new_density = max(new_density, 0.0);
+    new_temperature = max(new_temperature, params.ambient_temperature_k);
+
+    imageStore(density_out, coord, vec4(new_density, 0, 0, 0));
+    imageStore(temperature_out, coord, vec4(new_temperature, 0, 0, 0));
+}

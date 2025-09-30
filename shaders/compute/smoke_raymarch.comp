@@ -1,0 +1,178 @@
+#version 450
+
+/**
+ * Smoke Volumetric Raymarching Shader
+ *
+ * Renders volumetric smoke using raymarching with:
+ * - Beer's law absorption
+ * - In-scattering from ReSTIR lighting
+ * - Atmospheric fog integration
+ * - Early termination for performance
+ *
+ * Physics:
+ * - Transmittance: T = exp(-σ_t * distance)
+ * - In-scattering: L_s = ∫ σ_s * L_i * T * ds
+ * where σ_t = extinction, σ_s = scattering, L_i = incoming light
+ */
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+// Scene color (read-write)
+layout(binding = 0, rgba16f) uniform image2D scene_color;
+
+// Scene depth
+layout(binding = 1) uniform sampler2D scene_depth;
+
+// Smoke density
+layout(binding = 2) uniform sampler3D smoke_density;
+
+// Smoke temporal reservoirs (lighting)
+layout(binding = 3) uniform sampler3D smoke_lighting;
+
+layout(push_constant) uniform RaymarchParams {
+    mat4 inv_view_proj;          // Inverse view-projection matrix
+    vec3 camera_position_world;
+    float _pad0;
+    vec3 volume_origin_world;    // Smoke volume world position
+    float cell_size_m;
+    vec3 volume_size_world;      // Smoke volume world size (m)
+    uint num_samples;            // Raymarch steps (32-128)
+    vec3 extinction_color;       // Smoke color (RGB)
+    float density_multiplier;    // Visual density scale
+    vec3 scattering_color;       // In-scatter color
+    float _pad1;
+    uvec3 resolution;
+    uint enable_shadows;         // Whether smoke casts shadows
+    vec2 screen_size;
+} params;
+
+// Reconstruct world position from depth
+vec3 world_position_from_depth(vec2 tex_coord, float depth) {
+    vec4 ndc = vec4(
+        tex_coord.x * 2.0 - 1.0,
+        tex_coord.y * 2.0 - 1.0,
+        depth * 2.0 - 1.0,
+        1.0
+    );
+    vec4 world = params.inv_view_proj * ndc;
+    return world.xyz / world.w;
+}
+
+// Check if position is inside smoke volume
+bool is_inside_volume(vec3 world_pos) {
+    vec3 local_pos = world_pos - params.volume_origin_world;
+    return all(greaterThanEqual(local_pos, vec3(0))) &&
+           all(lessThan(local_pos, params.volume_size_world));
+}
+
+// World position to volume UV coordinates
+vec3 world_to_volume_uv(vec3 world_pos) {
+    vec3 local_pos = world_pos - params.volume_origin_world;
+    return local_pos / params.volume_size_world;
+}
+
+// Sample smoke density at world position
+float sample_density(vec3 world_pos) {
+    if (!is_inside_volume(world_pos)) {
+        return 0.0;
+    }
+    vec3 uv = world_to_volume_uv(world_pos);
+    return texture(smoke_density, uv).r * params.density_multiplier;
+}
+
+// Sample smoke lighting at world position
+vec3 sample_lighting(vec3 world_pos) {
+    if (!is_inside_volume(world_pos)) {
+        return vec3(0.0);
+    }
+    vec3 uv = world_to_volume_uv(world_pos);
+    vec4 lighting = texture(smoke_lighting, uv);
+    return lighting.rgb;
+}
+
+void main() {
+    ivec2 pixel_coord = ivec2(gl_GlobalInvocationID.xy);
+
+    if (pixel_coord.x >= int(params.screen_size.x) ||
+        pixel_coord.y >= int(params.screen_size.y)) {
+        return;
+    }
+
+    vec2 tex_coord = (vec2(pixel_coord) + 0.5) / params.screen_size;
+
+    // Sample scene
+    vec4 scene = imageLoad(scene_color, pixel_coord);
+    float depth = texture(scene_depth, tex_coord).r;
+
+    // Reconstruct ray
+    vec3 ray_end = world_position_from_depth(tex_coord, depth);
+    vec3 ray_start = params.camera_position_world;
+    vec3 ray_dir = normalize(ray_end - ray_start);
+    float ray_length = length(ray_end - ray_start);
+
+    // Check if ray intersects smoke volume
+    // Simple AABB intersection
+    vec3 inv_ray_dir = 1.0 / (ray_dir + 0.0001);  // Avoid division by zero
+    vec3 tmin_vec = (params.volume_origin_world - ray_start) * inv_ray_dir;
+    vec3 tmax_vec = (params.volume_origin_world + params.volume_size_world - ray_start) * inv_ray_dir;
+
+    vec3 t1 = min(tmin_vec, tmax_vec);
+    vec3 t2 = max(tmin_vec, tmax_vec);
+
+    float t_near = max(max(t1.x, t1.y), t1.z);
+    float t_far = min(min(t2.x, t2.y), t2.z);
+
+    // No intersection or behind camera
+    if (t_far < t_near || t_far < 0.0) {
+        return;
+    }
+
+    // Clamp to scene geometry
+    t_near = max(t_near, 0.0);
+    t_far = min(t_far, ray_length);
+
+    if (t_near >= t_far) {
+        return;
+    }
+
+    // Raymarch through smoke
+    float march_distance = t_far - t_near;
+    float step_size = march_distance / float(params.num_samples);
+
+    vec3 accumulated_light = vec3(0);
+    float transmittance = 1.0;
+
+    for (uint i = 0; i < params.num_samples; ++i) {
+        float t = t_near + step_size * (float(i) + 0.5);
+        vec3 sample_pos = ray_start + ray_dir * t;
+
+        // Sample smoke
+        float density = sample_density(sample_pos);
+
+        if (density < 0.001) {
+            continue;  // Empty space, skip
+        }
+
+        // Extinction (Beer's law)
+        float extinction = density * step_size;
+        float sample_transmittance = exp(-extinction);
+
+        // In-scattering
+        vec3 lighting = sample_lighting(sample_pos);
+        vec3 scattered_light = lighting * density * params.scattering_color;
+
+        // Accumulate
+        accumulated_light += scattered_light * transmittance * step_size;
+        transmittance *= sample_transmittance;
+
+        // Early termination
+        if (transmittance < 0.01) {
+            break;
+        }
+    }
+
+    // Composite with scene
+    vec3 final_color = scene.rgb * transmittance + accumulated_light;
+
+    imageStore(scene_color, pixel_coord, vec4(final_color, scene.a));
+}

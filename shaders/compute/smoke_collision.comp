@@ -1,0 +1,145 @@
+#version 450
+
+/**
+ * Smoke Collision Shader
+ *
+ * Handles smoke collision with world geometry (walls, doors, furniture, etc.)
+ * Prevents smoke from passing through solid objects.
+ *
+ * Uses:
+ * - Voxelized world geometry (SDF or occupancy grid)
+ * - Zero normal velocity at solid boundaries (Neumann condition)
+ * - Smoke flows around obstacles naturally
+ *
+ * Physics:
+ * - Solid boundary condition: v·n = 0 (velocity normal to surface = 0)
+ * - Tangential velocity preserved (smoke slides along walls)
+ * - Pressure reflection at walls
+ *
+ * Integration:
+ * - Doors: Dynamic obstacles (open = passable, closed = solid)
+ * - Windows: Can allow smoke if broken
+ * - Vents: Allow smoke flow with reduced velocity
+ */
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
+
+// Input velocity
+layout(binding = 0) uniform sampler3D velocity_in;
+
+// Output velocity (with collision response)
+layout(binding = 1, rgba32f) uniform image3D velocity_out;
+
+// World collision/occupancy grid
+// R channel: 0 = empty, 1 = solid wall
+// G channel: Door state (0 = open, 1 = closed)
+// B channel: Material porosity (0 = solid, 1 = fully porous)
+layout(binding = 2) uniform sampler3D world_collision;
+
+// Smoke density (to prevent accumulation in walls)
+layout(binding = 3) uniform sampler3D density;
+layout(binding = 4, r32f) uniform image3D density_out;
+
+layout(push_constant) uniform CollisionParams {
+    vec3 volume_origin_world;    // Smoke volume world position
+    float cell_size_m;
+    uvec3 resolution;
+    float bounce_damping;         // Velocity reduction on collision (0-1)
+    vec3 world_collision_offset;  // World collision grid offset
+    float world_collision_scale;  // World collision grid scale
+} params;
+
+// Sample world collision at smoke voxel position
+vec4 sample_world_collision(ivec3 coord) {
+    vec3 world_pos = params.volume_origin_world + vec3(coord) * params.cell_size_m;
+    vec3 collision_uv = (world_pos - params.world_collision_offset) / params.world_collision_scale;
+
+    // Clamp to collision grid bounds
+    collision_uv = clamp(collision_uv, vec3(0), vec3(1));
+
+    return texture(world_collision, collision_uv);
+}
+
+// Calculate surface normal from collision grid
+vec3 calculate_surface_normal(ivec3 coord) {
+    float center = sample_world_collision(coord).r;
+
+    // Finite differences
+    float dx_pos = sample_world_collision(coord + ivec3(1, 0, 0)).r;
+    float dx_neg = sample_world_collision(coord - ivec3(1, 0, 0)).r;
+    float dy_pos = sample_world_collision(coord + ivec3(0, 1, 0)).r;
+    float dy_neg = sample_world_collision(coord - ivec3(0, 1, 0)).r;
+    float dz_pos = sample_world_collision(coord + ivec3(0, 0, 1)).r;
+    float dz_neg = sample_world_collision(coord - ivec3(0, 0, 1)).r;
+
+    vec3 gradient = vec3(
+        dx_pos - dx_neg,
+        dy_pos - dy_neg,
+        dz_pos - dz_neg
+    );
+
+    float len = length(gradient);
+    if (len < 0.001) {
+        return vec3(0, 1, 0);  // Default up
+    }
+
+    return gradient / len;
+}
+
+void main() {
+    ivec3 coord = ivec3(gl_GlobalInvocationID.xyz);
+
+    if (coord.x >= int(params.resolution.x) ||
+        coord.y >= int(params.resolution.y) ||
+        coord.z >= int(params.resolution.z)) {
+        return;
+    }
+
+    vec3 texel_size = 1.0 / vec3(params.resolution);
+    vec3 uv = (vec3(coord) + 0.5) * texel_size;
+
+    // Sample velocity
+    vec3 velocity = texture(velocity_in, uv).rgb;
+
+    // Sample world collision
+    vec4 collision = sample_world_collision(coord);
+    float wall_solid = collision.r;        // 0 = empty, 1 = solid wall
+    float door_closed = collision.g;       // 0 = open, 1 = closed
+    float porosity = collision.b;          // 0 = solid, 1 = porous
+
+    // Effective solidity (walls always solid, doors depend on state)
+    float effective_solid = max(wall_solid, door_closed);
+
+    if (effective_solid < 0.1) {
+        // Empty space, no collision
+        imageStore(velocity_out, coord, vec4(velocity, 0));
+        return;
+    }
+
+    // Collision detected - apply boundary condition
+    vec3 surface_normal = calculate_surface_normal(coord);
+
+    // Decompose velocity into normal and tangential components
+    float velocity_normal = dot(velocity, surface_normal);
+    vec3 velocity_tangent = velocity - velocity_normal * surface_normal;
+
+    // Zero normal velocity at solid boundary (Neumann condition)
+    // Preserve tangential velocity (smoke slides along wall)
+    vec3 corrected_velocity = velocity_tangent * params.bounce_damping;
+
+    // Porous materials (vents, grates) allow reduced flow
+    if (porosity > 0.1) {
+        corrected_velocity = mix(corrected_velocity, velocity * porosity, porosity);
+    }
+
+    imageStore(velocity_out, coord, vec4(corrected_velocity, 0));
+
+    // Prevent density accumulation in walls
+    // Dissipate smoke that enters solid geometry
+    float density_value = texture(density, uv).r;
+    if (effective_solid > 0.5 && density_value > 0.001) {
+        // Rapidly dissipate smoke in walls (shouldn't happen ideally, but failsafe)
+        float dissipated_density = density_value * 0.5;  // 50% reduction per frame
+        imageStore(density_out, coord, vec4(dissipated_density, 0, 0, 0));
+    }
+}

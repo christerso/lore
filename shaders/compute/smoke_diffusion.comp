@@ -1,0 +1,66 @@
+#version 450
+
+/**
+ * Smoke Diffusion Shader
+ *
+ * Implements isotropic diffusion using finite differences.
+ * Smoke spreads naturally from high to low concentration.
+ *
+ * Physics: ∂ρ/∂t = D∇²ρ (Fick's law of diffusion)
+ * where D = diffusion coefficient, ρ = density
+ *
+ * Discrete: ρ_new(i,j,k) = ρ(i,j,k) + D*dt/h² * Σ(ρ_neighbors - ρ(i,j,k))
+ */
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
+
+// Input density (read)
+layout(binding = 0) uniform sampler3D density_in;
+
+// Output density (write)
+layout(binding = 1, r32f) uniform writeonly image3D density_out;
+
+layout(push_constant) uniform DiffusionParams {
+    float diffusion_rate;    // Diffusion coefficient (m²/s)
+    float delta_time_s;
+    float cell_size_m;
+    float _pad;
+    uvec3 resolution;
+} params;
+
+void main() {
+    ivec3 coord = ivec3(gl_GlobalInvocationID.xyz);
+
+    if (coord.x >= int(params.resolution.x) ||
+        coord.y >= int(params.resolution.y) ||
+        coord.z >= int(params.resolution.z)) {
+        return;
+    }
+
+    vec3 texel_size = 1.0 / vec3(params.resolution);
+    vec3 uv = (vec3(coord) + 0.5) * texel_size;
+
+    // Sample center
+    float center = texture(density_in, uv).r;
+
+    // Sample 6 neighbors (face-connected)
+    float neighbor_sum = 0.0;
+    neighbor_sum += texture(density_in, uv + vec3(texel_size.x, 0, 0)).r;  // +X
+    neighbor_sum += texture(density_in, uv - vec3(texel_size.x, 0, 0)).r;  // -X
+    neighbor_sum += texture(density_in, uv + vec3(0, texel_size.y, 0)).r;  // +Y
+    neighbor_sum += texture(density_in, uv - vec3(0, texel_size.y, 0)).r;  // -Y
+    neighbor_sum += texture(density_in, uv + vec3(0, 0, texel_size.z)).r;  // +Z
+    neighbor_sum += texture(density_in, uv - vec3(0, 0, texel_size.z)).r;  // -Z
+
+    // Laplacian: ∇²ρ ≈ (neighbor_sum - 6*center) / h²
+    float laplacian = (neighbor_sum - 6.0 * center) / (params.cell_size_m * params.cell_size_m);
+
+    // Diffusion: ∂ρ/∂t = D∇²ρ
+    float diffusion = params.diffusion_rate * laplacian * params.delta_time_s;
+
+    // New density
+    float new_density = center + diffusion;
+    new_density = max(new_density, 0.0);  // Clamp to positive
+
+    imageStore(density_out, coord, vec4(new_density, 0, 0, 0));
+}
