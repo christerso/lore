@@ -167,6 +167,33 @@ public:
     );
 
     /**
+     * @brief Generate stress-guided Poisson samples for directional fracture
+     *
+     * Creates non-uniform point distribution based on impact data:
+     * - More fragments near impact point
+     * - Smaller fragments near impact (reduced min_distance)
+     * - Larger fragments away from impact (increased min_distance)
+     *
+     * @param aabb_min Bounding box minimum
+     * @param aabb_max Bounding box maximum
+     * @param base_min_distance Base minimum distance between points
+     * @param max_points Maximum number of points to generate
+     * @param impact Impact data (position, direction, force, type)
+     * @param material Material-specific fracture parameters
+     * @param seed Random seed (0 = time-based)
+     * @return Vector of sample points with stress-based distribution
+     */
+    static std::vector<math::Vec3> generate_stress_guided_samples(
+        const math::Vec3& aabb_min,
+        const math::Vec3& aabb_max,
+        float base_min_distance,
+        uint32_t max_points,
+        const ImpactData& impact,
+        const MaterialFractureParams& material,
+        uint32_t seed = 0
+    );
+
+    /**
      * @brief Calculate physics properties for a debris piece
      *
      * Computes centroid, mass, and diagonal inertia tensor from geometry.
@@ -175,6 +202,30 @@ public:
      * @param piece Debris piece to compute properties for (modifies in-place)
      */
     static void calculate_physics_properties(DebrisPiece& piece);
+
+    /**
+     * @brief Create material-specific fracture parameters
+     *
+     * Provides presets for common materials:
+     * - Stone: 5-8 large angular chunks, high brittleness
+     * - Wood: 15-25 splinter-like shards along grain, medium brittleness
+     * - Glass: 20-40 sharp triangular pieces, extreme brittleness
+     * - Metal: 8-15 bent/torn pieces, low brittleness (ductile)
+     * - Concrete: 10-20 irregular chunks, medium brittleness
+     */
+    enum class MaterialPreset {
+        Stone,
+        Wood,
+        Glass,
+        Metal,
+        Concrete,
+        Custom
+    };
+
+    static MaterialFractureParams create_material_params(
+        MaterialPreset preset,
+        const math::Vec3& grain_direction = {0, 0, 0}
+    );
 
     /**
      * @brief Generate internal voxel approximation for fluid simulation

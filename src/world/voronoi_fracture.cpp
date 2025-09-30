@@ -122,6 +122,223 @@ std::vector<math::Vec3> VoronoiFracture::generate_poisson_samples(
     return points;
 }
 
+// Generate stress-guided Poisson samples for directional fracture
+std::vector<math::Vec3> VoronoiFracture::generate_stress_guided_samples(
+    const math::Vec3& aabb_min,
+    const math::Vec3& aabb_max,
+    float base_min_distance,
+    uint32_t max_points,
+    const ImpactData& impact,
+    const MaterialFractureParams& material,
+    uint32_t seed)
+{
+    // Use time-based seed if not provided
+    if (seed == 0) {
+        seed = static_cast<uint32_t>(
+            std::chrono::high_resolution_clock::now().time_since_epoch().count()
+        );
+    }
+
+    std::mt19937 rng(seed);
+    std::uniform_real_distribution<float> dist_01(0.0f, 1.0f);
+
+    // Calculate mesh center for reference
+    math::Vec3 mesh_center = {
+        (aabb_min.x + aabb_max.x) * 0.5f,
+        (aabb_min.y + aabb_max.y) * 0.5f,
+        (aabb_min.z + aabb_max.z) * 0.5f
+    };
+
+    // Convert impact position to local space if needed
+    math::Vec3 impact_point = impact.position;
+
+    // Calculate maximum distance from impact point to mesh bounds
+    math::Vec3 corner_distances[8] = {
+        {aabb_min.x - impact_point.x, aabb_min.y - impact_point.y, aabb_min.z - impact_point.z},
+        {aabb_max.x - impact_point.x, aabb_min.y - impact_point.y, aabb_min.z - impact_point.z},
+        {aabb_max.x - impact_point.x, aabb_max.y - impact_point.y, aabb_min.z - impact_point.z},
+        {aabb_min.x - impact_point.x, aabb_max.y - impact_point.y, aabb_min.z - impact_point.z},
+        {aabb_min.x - impact_point.x, aabb_min.y - impact_point.y, aabb_max.z - impact_point.z},
+        {aabb_max.x - impact_point.x, aabb_min.y - impact_point.y, aabb_max.z - impact_point.z},
+        {aabb_max.x - impact_point.x, aabb_max.y - impact_point.y, aabb_max.z - impact_point.z},
+        {aabb_min.x - impact_point.x, aabb_max.y - impact_point.y, aabb_max.z - impact_point.z}
+    };
+
+    float max_impact_distance = 0.0f;
+    for (const auto& d : corner_distances) {
+        float dist = std::sqrt(d.x*d.x + d.y*d.y + d.z*d.z);
+        max_impact_distance = std::max(max_impact_distance, dist);
+    }
+
+    std::vector<math::Vec3> points;
+    std::vector<math::Vec3> active_list;
+
+    // Lambda: Calculate distance-based minimum spacing
+    auto get_min_distance_at_point = [&](const math::Vec3& point) -> float {
+        // Distance from impact point
+        float dx = point.x - impact_point.x;
+        float dy = point.y - impact_point.y;
+        float dz = point.z - impact_point.z;
+        float dist_from_impact = std::sqrt(dx*dx + dy*dy + dz*dz);
+
+        // Normalized distance (0 at impact, 1 at farthest corner)
+        float normalized_dist = std::min(1.0f, dist_from_impact / std::max(0.01f, max_impact_distance));
+
+        // Fragment size gradient based on impact type
+        float size_gradient = 1.0f;
+
+        switch (impact.type) {
+            case ImpactType::PointImpact:
+                // Small cone near impact, exponential falloff
+                size_gradient = 0.3f + 0.7f * (normalized_dist * normalized_dist);
+                break;
+
+            case ImpactType::BluntForce:
+                // Medium depression with radial pattern
+                size_gradient = 0.5f + 0.5f * normalized_dist;
+                break;
+
+            case ImpactType::Explosion:
+                // More uniform, slightly smaller near center
+                size_gradient = 0.7f + 0.3f * normalized_dist;
+                break;
+
+            case ImpactType::Cutting:
+                // Linear gradient along impact direction
+                {
+                    float alignment = (dx * impact.direction.x +
+                                     dy * impact.direction.y +
+                                     dz * impact.direction.z) / std::max(0.01f, dist_from_impact);
+                    size_gradient = 0.4f + 0.6f * std::abs(alignment);
+                }
+                break;
+
+            case ImpactType::Crushing:
+                // Vertical compression, horizontal spread
+                size_gradient = 0.6f + 0.4f * (std::abs(point.y - impact_point.y) /
+                                              std::max(0.01f, max_impact_distance));
+                break;
+
+            case ImpactType::Shearing:
+                // Diagonal pattern
+                size_gradient = 0.5f + 0.5f * std::abs(normalized_dist - 0.5f) * 2.0f;
+                break;
+        }
+
+        // Apply material-specific variance
+        size_gradient *= (1.0f + material.fragment_size_variance * (dist_01(rng) - 0.5f) * 0.5f);
+
+        // Clamp and return
+        return base_min_distance * std::max(0.2f, std::min(2.0f, size_gradient));
+    };
+
+    // Start with point near impact location
+    math::Vec3 first_point = impact_point;
+
+    // Clamp to AABB
+    first_point.x = std::max(aabb_min.x, std::min(aabb_max.x, first_point.x));
+    first_point.y = std::max(aabb_min.y, std::min(aabb_max.y, first_point.y));
+    first_point.z = std::max(aabb_min.z, std::min(aabb_max.z, first_point.z));
+
+    points.push_back(first_point);
+    active_list.push_back(first_point);
+
+    const uint32_t k = 30; // Number of attempts per point
+
+    std::uniform_real_distribution<float> dist_angle(0.0f, 2.0f * 3.14159265f);
+
+    while (!active_list.empty() && points.size() < max_points) {
+        // Pick random point from active list
+        std::uniform_int_distribution<size_t> active_dist(0, active_list.size() - 1);
+        size_t active_idx = active_dist(rng);
+        math::Vec3 center = active_list[active_idx];
+
+        // Get minimum distance at this center point
+        float center_min_dist = get_min_distance_at_point(center);
+
+        bool found_valid = false;
+
+        // Try k times to place point around center
+        for (uint32_t attempt = 0; attempt < k; ++attempt) {
+            // Generate point in spherical shell
+            float theta = dist_angle(rng);
+            float phi = std::acos(2.0f * dist_01(rng) - 1.0f);
+            float radius = center_min_dist + dist_01(rng) * center_min_dist;
+
+            // Apply directional bias for anisotropic materials (wood grain)
+            math::Vec3 sample_dir = {
+                std::sin(phi) * std::cos(theta),
+                std::sin(phi) * std::sin(theta),
+                std::cos(phi)
+            };
+
+            // Bias along grain direction for wood
+            if (material.grain_direction.x != 0.0f ||
+                material.grain_direction.y != 0.0f ||
+                material.grain_direction.z != 0.0f)
+            {
+                // Dot product with grain direction
+                float grain_alignment = sample_dir.x * material.grain_direction.x +
+                                       sample_dir.y * material.grain_direction.y +
+                                       sample_dir.z * material.grain_direction.z;
+
+                // Stretch radius along grain
+                radius *= (1.0f + 0.5f * std::abs(grain_alignment));
+            }
+
+            math::Vec3 candidate;
+            candidate.x = center.x + radius * sample_dir.x;
+            candidate.y = center.y + radius * sample_dir.y;
+            candidate.z = center.z + radius * sample_dir.z;
+
+            // Check if candidate is within bounds
+            if (candidate.x < aabb_min.x || candidate.x > aabb_max.x ||
+                candidate.y < aabb_min.y || candidate.y > aabb_max.y ||
+                candidate.z < aabb_min.z || candidate.z > aabb_max.z) {
+                continue;
+            }
+
+            // Get minimum distance at candidate position
+            float candidate_min_dist = get_min_distance_at_point(candidate);
+
+            // Check minimum distance to existing points
+            bool too_close = false;
+            for (const auto& p : points) {
+                float dx = candidate.x - p.x;
+                float dy = candidate.y - p.y;
+                float dz = candidate.z - p.z;
+                float dist_sq = dx*dx + dy*dy + dz*dz;
+
+                // Use average of candidate and existing point min distances
+                float required_min_dist = get_min_distance_at_point(p);
+                float avg_min_dist = (candidate_min_dist + required_min_dist) * 0.5f;
+
+                if (dist_sq < avg_min_dist * avg_min_dist) {
+                    too_close = true;
+                    break;
+                }
+            }
+
+            if (!too_close) {
+                points.push_back(candidate);
+                active_list.push_back(candidate);
+                found_valid = true;
+                break;
+            }
+        }
+
+        // Remove from active list if no valid point found
+        if (!found_valid) {
+            active_list.erase(active_list.begin() + active_idx);
+        }
+    }
+
+    LOG_DEBUG(Game, "Stress-guided sampling generated {} points (requested: {}, impact type: {})",
+             points.size(), max_points, static_cast<int>(impact.type));
+
+    return points;
+}
+
 // Compute 3D Voronoi cells (simplified bounded Voronoi)
 std::vector<std::vector<math::Vec3>> VoronoiFracture::compute_voronoi_cells(
     const std::vector<math::Vec3>& sample_points,
@@ -259,6 +476,77 @@ VoronoiFracture::ClippedGeometry VoronoiFracture::clip_cell_against_mesh(
     }
 
     return result;
+}
+
+// Create material-specific fracture parameters
+MaterialFractureParams VoronoiFracture::create_material_params(
+    MaterialPreset preset,
+    const math::Vec3& grain_direction)
+{
+    MaterialFractureParams params;
+
+    switch (preset) {
+        case MaterialPreset::Stone:
+            params.min_fragments = 5;
+            params.max_fragments = 8;
+            params.fragment_size_variance = 0.6f;  // Moderate variance
+            params.angular_bias = 0.8f;            // Very angular chunks
+            params.grain_direction = {0, 0, 0};    // Isotropic
+            params.brittleness = 0.9f;             // Very brittle
+            LOG_DEBUG(Game, "Created Stone material params: 5-8 angular chunks");
+            break;
+
+        case MaterialPreset::Wood:
+            params.min_fragments = 15;
+            params.max_fragments = 25;
+            params.fragment_size_variance = 0.8f;  // High variance (splinters)
+            params.angular_bias = 0.3f;            // Some angular features
+            params.grain_direction = grain_direction.x == 0.0f && grain_direction.y == 0.0f && grain_direction.z == 0.0f
+                                    ? math::Vec3{0, 1, 0}  // Default vertical grain
+                                    : grain_direction;
+            params.brittleness = 0.5f;             // Medium brittleness
+            LOG_DEBUG(Game, "Created Wood material params: 15-25 splinters along grain [{:.2f}, {:.2f}, {:.2f}]",
+                     params.grain_direction.x, params.grain_direction.y, params.grain_direction.z);
+            break;
+
+        case MaterialPreset::Glass:
+            params.min_fragments = 20;
+            params.max_fragments = 40;
+            params.fragment_size_variance = 0.9f;  // Very high variance
+            params.angular_bias = 0.9f;            // Very sharp, angular
+            params.grain_direction = {0, 0, 0};    // Isotropic
+            params.brittleness = 1.0f;             // Maximum brittleness
+            LOG_DEBUG(Game, "Created Glass material params: 20-40 sharp pieces");
+            break;
+
+        case MaterialPreset::Metal:
+            params.min_fragments = 8;
+            params.max_fragments = 15;
+            params.fragment_size_variance = 0.4f;  // Lower variance
+            params.angular_bias = 0.2f;            // Smooth, bent edges
+            params.grain_direction = {0, 0, 0};    // Isotropic
+            params.brittleness = 0.1f;             // Very ductile
+            LOG_DEBUG(Game, "Created Metal material params: 8-15 bent pieces");
+            break;
+
+        case MaterialPreset::Concrete:
+            params.min_fragments = 10;
+            params.max_fragments = 20;
+            params.fragment_size_variance = 0.7f;  // High variance
+            params.angular_bias = 0.7f;            // Quite angular
+            params.grain_direction = {0, 0, 0};    // Isotropic
+            params.brittleness = 0.7f;             // Fairly brittle
+            LOG_DEBUG(Game, "Created Concrete material params: 10-20 irregular chunks");
+            break;
+
+        case MaterialPreset::Custom:
+        default:
+            // Return defaults
+            LOG_DEBUG(Game, "Created Custom material params: using defaults");
+            break;
+    }
+
+    return params;
 }
 
 // Calculate physics properties
@@ -465,17 +753,36 @@ std::vector<DebrisPiece> VoronoiFracture::fracture_mesh(
     math::Vec3 aabb_min, aabb_max;
     calculate_aabb(vertices, aabb_min, aabb_max);
 
-    // Generate Poisson disk sample points
-    std::vector<math::Vec3> sample_points = generate_poisson_samples(
-        aabb_min,
-        aabb_max,
-        config.poisson_min_distance,
-        config.num_fragments,
-        config.random_seed
-    );
+    // Generate sample points (stress-guided if impact provided, uniform otherwise)
+    std::vector<math::Vec3> sample_points;
+
+    if (config.impact != nullptr) {
+        // Use stress-guided sampling for directional fracture
+        sample_points = generate_stress_guided_samples(
+            aabb_min,
+            aabb_max,
+            config.poisson_min_distance,
+            config.num_fragments,
+            *config.impact,
+            config.material_params,
+            config.random_seed
+        );
+
+        LOG_INFO(Game, "Using directional fracture (impact type: {}, force: {:.1f}N)",
+                static_cast<int>(config.impact->type), config.impact->force);
+    } else {
+        // Use uniform Poisson disk sampling
+        sample_points = generate_poisson_samples(
+            aabb_min,
+            aabb_max,
+            config.poisson_min_distance,
+            config.num_fragments,
+            config.random_seed
+        );
+    }
 
     if (sample_points.empty()) {
-        LOG_ERROR(Game, "Failed to generate Poisson samples");
+        LOG_ERROR(Game, "Failed to generate sample points");
         return {};
     }
 
@@ -521,6 +828,166 @@ std::vector<DebrisPiece> VoronoiFracture::fracture_mesh(
         piece.rotation = {0, 0, 0, 1}; // Identity quaternion
         piece.velocity = {0, 0, 0};
         piece.angular_velocity = {0, 0, 0};
+
+        // Apply initial velocity based on impact (if provided)
+        if (config.impact != nullptr) {
+            const ImpactData& impact = *config.impact;
+
+            // Calculate vector from impact point to piece centroid
+            math::Vec3 to_piece = {
+                piece.centroid.x - impact.position.x,
+                piece.centroid.y - impact.position.y,
+                piece.centroid.z - impact.position.z
+            };
+
+            float distance_from_impact = std::sqrt(
+                to_piece.x * to_piece.x +
+                to_piece.y * to_piece.y +
+                to_piece.z * to_piece.z
+            );
+
+            if (distance_from_impact > 1e-6f) {
+                // Normalize to_piece vector
+                to_piece.x /= distance_from_impact;
+                to_piece.y /= distance_from_impact;
+                to_piece.z /= distance_from_impact;
+
+                // Base impulse magnitude (inversely proportional to mass and distance)
+                float impulse_magnitude = impact.force * impact.impulse_duration;
+                float velocity_magnitude = (impulse_magnitude / piece.mass) /
+                                          std::max(0.5f, distance_from_impact);
+
+                // Impact-type specific velocity direction
+                math::Vec3 velocity_dir = to_piece;
+
+                switch (impact.type) {
+                    case ImpactType::PointImpact:
+                        // Cone-shaped ejection along impact direction
+                        {
+                            float alignment = to_piece.x * impact.direction.x +
+                                            to_piece.y * impact.direction.y +
+                                            to_piece.z * impact.direction.z;
+                            if (alignment > 0.0f) {
+                                // Blend between radial and impact direction
+                                velocity_dir.x = 0.7f * impact.direction.x + 0.3f * to_piece.x;
+                                velocity_dir.y = 0.7f * impact.direction.y + 0.3f * to_piece.y;
+                                velocity_dir.z = 0.7f * impact.direction.z + 0.3f * to_piece.z;
+
+                                // Normalize
+                                float len = std::sqrt(velocity_dir.x * velocity_dir.x +
+                                                     velocity_dir.y * velocity_dir.y +
+                                                     velocity_dir.z * velocity_dir.z);
+                                if (len > 1e-6f) {
+                                    velocity_dir.x /= len;
+                                    velocity_dir.y /= len;
+                                    velocity_dir.z /= len;
+                                }
+                            }
+                        }
+                        break;
+
+                    case ImpactType::Explosion:
+                        // Pure radial ejection
+                        velocity_dir = to_piece;
+                        velocity_magnitude *= 1.5f; // Explosions are more energetic
+                        break;
+
+                    case ImpactType::BluntForce:
+                        // Mix of impact direction and radial
+                        velocity_dir.x = 0.5f * impact.direction.x + 0.5f * to_piece.x;
+                        velocity_dir.y = 0.5f * impact.direction.y + 0.5f * to_piece.y;
+                        velocity_dir.z = 0.5f * impact.direction.z + 0.5f * to_piece.z;
+                        {
+                            float len = std::sqrt(velocity_dir.x * velocity_dir.x +
+                                                 velocity_dir.y * velocity_dir.y +
+                                                 velocity_dir.z * velocity_dir.z);
+                            if (len > 1e-6f) {
+                                velocity_dir.x /= len;
+                                velocity_dir.y /= len;
+                                velocity_dir.z /= len;
+                            }
+                        }
+                        break;
+
+                    case ImpactType::Cutting:
+                        // Perpendicular to cut direction
+                        {
+                            // Cross product: impact.direction × to_piece
+                            math::Vec3 perp = {
+                                impact.direction.y * to_piece.z - impact.direction.z * to_piece.y,
+                                impact.direction.z * to_piece.x - impact.direction.x * to_piece.z,
+                                impact.direction.x * to_piece.y - impact.direction.y * to_piece.x
+                            };
+
+                            float len = std::sqrt(perp.x * perp.x + perp.y * perp.y + perp.z * perp.z);
+                            if (len > 1e-6f) {
+                                velocity_dir = perp;
+                                velocity_dir.x /= len;
+                                velocity_dir.y /= len;
+                                velocity_dir.z /= len;
+                            }
+                        }
+                        velocity_magnitude *= 0.7f; // Cuts have less explosive force
+                        break;
+
+                    case ImpactType::Crushing:
+                        // Horizontal spread
+                        velocity_dir.y *= 0.3f; // Reduce vertical component
+                        {
+                            float len = std::sqrt(velocity_dir.x * velocity_dir.x +
+                                                 velocity_dir.y * velocity_dir.y +
+                                                 velocity_dir.z * velocity_dir.z);
+                            if (len > 1e-6f) {
+                                velocity_dir.x /= len;
+                                velocity_dir.y /= len;
+                                velocity_dir.z /= len;
+                            }
+                        }
+                        break;
+
+                    case ImpactType::Shearing:
+                        // Perpendicular to impact direction
+                        velocity_dir.x = to_piece.x - impact.direction.x *
+                                        (to_piece.x * impact.direction.x +
+                                         to_piece.y * impact.direction.y +
+                                         to_piece.z * impact.direction.z);
+                        velocity_dir.y = to_piece.y - impact.direction.y *
+                                        (to_piece.x * impact.direction.x +
+                                         to_piece.y * impact.direction.y +
+                                         to_piece.z * impact.direction.z);
+                        velocity_dir.z = to_piece.z - impact.direction.z *
+                                        (to_piece.x * impact.direction.x +
+                                         to_piece.y * impact.direction.y +
+                                         to_piece.z * impact.direction.z);
+                        {
+                            float len = std::sqrt(velocity_dir.x * velocity_dir.x +
+                                                 velocity_dir.y * velocity_dir.y +
+                                                 velocity_dir.z * velocity_dir.z);
+                            if (len > 1e-6f) {
+                                velocity_dir.x /= len;
+                                velocity_dir.y /= len;
+                                velocity_dir.z /= len;
+                            }
+                        }
+                        break;
+                }
+
+                // Apply velocity
+                piece.velocity.x = velocity_dir.x * velocity_magnitude;
+                piece.velocity.y = velocity_dir.y * velocity_magnitude;
+                piece.velocity.z = velocity_dir.z * velocity_magnitude;
+
+                // Apply angular velocity (tumbling)
+                // Randomized tumbling based on fragment shape
+                std::mt19937 rng(config.random_seed + static_cast<uint32_t>(i));
+                std::uniform_real_distribution<float> dist_angular(-1.0f, 1.0f);
+
+                float tumble_strength = velocity_magnitude * 0.5f; // Proportional to linear velocity
+                piece.angular_velocity.x = dist_angular(rng) * tumble_strength;
+                piece.angular_velocity.y = dist_angular(rng) * tumble_strength;
+                piece.angular_velocity.z = dist_angular(rng) * tumble_strength;
+            }
+        }
 
         // Generate voxel approximation if requested
         if (config.generate_voxel_approximation) {
