@@ -241,13 +241,32 @@ struct DirectionalShadowMaps {
 };
 
 /**
+ * @brief Image-Based Lighting configuration
+ */
+struct IBLConfig {
+    float intensity = 1.0f;              // IBL intensity multiplier
+    float rotation_y = 0.0f;            // Y-axis rotation in radians
+    float atmospheric_blend = 0.3f;     // Blend factor with atmospheric (0-1)
+    float max_reflection_lod = 10.0f;   // Max mip level for prefiltered map
+};
+
+/**
+ * @brief IBL textures for environment lighting
+ */
+struct IBLTextures {
+    VkImageView irradiance = VK_NULL_HANDLE;        // Diffuse irradiance cubemap
+    VkImageView prefiltered = VK_NULL_HANDLE;       // Specular prefiltered cubemap
+    VkImageView brdf_lut = VK_NULL_HANDLE;          // BRDF integration LUT
+};
+
+/**
  * @brief Deferred rendering pipeline
  *
  * Implements a full deferred rendering system with:
  * - G-Buffer generation (geometry pass)
  * - PBR lighting pass with multiple light types
  * - HDR rendering with tone mapping
- * - Support for shadows, SSAO, and post-processing
+ * - Support for shadows, SSAO, post-processing, and IBL
  */
 class DeferredRenderer {
 public:
@@ -287,6 +306,12 @@ public:
     // Material management
     uint32_t register_material(const PBRMaterial& material);
     const PBRMaterial& get_material(uint32_t material_id) const;
+
+    // IBL management
+    void set_ibl_textures(const IBLTextures& textures);
+    void set_ibl_config(const IBLConfig& config);
+    const IBLConfig& get_ibl_config() const { return ibl_config_; }
+    bool has_ibl() const { return ibl_textures_.irradiance != VK_NULL_HANDLE; }
 
     // Post-processing management
     void set_post_process_config(const PostProcessConfig& config);
@@ -331,6 +356,7 @@ private:
     void create_descriptor_sets();
     void update_gbuffer_descriptor_set();
     void update_lights_descriptor_set();
+    void update_ibl_descriptor_set();
 
     // Buffers
     void create_light_buffer();
@@ -362,9 +388,12 @@ private:
     VkDescriptorPool descriptor_pool_ = VK_NULL_HANDLE;
     VkDescriptorSetLayout gbuffer_descriptor_layout_ = VK_NULL_HANDLE;
     VkDescriptorSetLayout lights_descriptor_layout_ = VK_NULL_HANDLE;
+    VkDescriptorSetLayout ibl_descriptor_layout_ = VK_NULL_HANDLE;
     VkDescriptorSet gbuffer_descriptor_set_ = VK_NULL_HANDLE;
     VkDescriptorSet lights_descriptor_set_ = VK_NULL_HANDLE;
+    VkDescriptorSet ibl_descriptor_set_ = VK_NULL_HANDLE;
     VkSampler gbuffer_sampler_ = VK_NULL_HANDLE;
+    VkSampler ibl_sampler_ = VK_NULL_HANDLE;
 
     // Light data
     std::vector<Light> lights_;
@@ -378,6 +407,12 @@ private:
     // Shadow configuration and resources
     ShadowConfig shadow_config_;
     DirectionalShadowMaps shadow_maps_;
+
+    // IBL configuration and resources
+    IBLConfig ibl_config_;
+    IBLTextures ibl_textures_;
+    VkBuffer ibl_ubo_buffer_ = VK_NULL_HANDLE;
+    VmaAllocation ibl_ubo_allocation_ = VK_NULL_HANDLE;
 
     // Shadow pipeline creation
     void create_shadow_pipeline();
