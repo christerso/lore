@@ -104,17 +104,33 @@ layout(set = 2, binding = 6) uniform sampler3D atmosphericScattering;    // 200�
 layout(set = 2, binding = 7) uniform AtmosphericUBO {
     vec3 planet_center;           // Planet center (world space)
     float planet_radius;          // Planet radius (meters)
-    
+
     float atmosphere_height;      // Atmosphere thickness
     float rayleigh_scale_height;  // Rayleigh scattering scale
     float mie_scale_height;       // Mie scattering scale
     vec3 rayleigh_scattering;     // Rayleigh coefficients
-    
+
     vec3 mie_scattering;          // Mie coefficients
     float mie_anisotropy;         // Mie phase function g
     vec3 sun_direction;           // Primary sun direction
     float sun_intensity;          // Sun intensity
 } atmospheric;
+
+// ═══════════════════════════════════════════════════════════════
+// IMAGE-BASED LIGHTING (IBL) UNIFORMS
+// ═══════════════════════════════════════════════════════════════
+
+// IBL textures (set = 3)
+layout(set = 3, binding = 0) uniform samplerCube iblIrradiance;        // Diffuse IBL (pre-convolved)
+layout(set = 3, binding = 1) uniform samplerCube iblPrefiltered;       // Specular IBL (roughness mips)
+layout(set = 3, binding = 2) uniform sampler2D iblBRDF;                // BRDF integration LUT
+
+layout(set = 3, binding = 3) uniform IBLUBO {
+    float intensity;                // IBL intensity multiplier
+    float rotation_y;              // Y-axis rotation (radians)
+    float atmospheric_blend;       // Blend with atmospheric (0-1)
+    float max_reflection_lod;      // Max mip level for prefiltered map
+} ibl;
 
 // ═══════════════════════════════════════════════════════════════
 // OUTPUTS
@@ -710,6 +726,128 @@ void sampleAtmospheric(vec3 worldPos, vec3 viewDir, out vec3 transmittance, out 
 }
 
 // ═══════════════════════════════════════════════════════════════
+// IMAGE-BASED LIGHTING FUNCTIONS
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Rotate direction vector around Y-axis
+ * --------------------------------------
+ * Used to rotate HDRI environment for sun alignment.
+ *
+ * Parameters:
+ *   dir = Direction vector to rotate
+ *   angle = Rotation angle in radians
+ *
+ * Returns: Rotated direction vector
+ */
+vec3 rotateY(vec3 dir, float angle) {
+    float s = sin(angle);
+    float c = cos(angle);
+    return vec3(
+        c * dir.x + s * dir.z,
+        dir.y,
+        -s * dir.x + c * dir.z
+    );
+}
+
+/**
+ * Calculate Image-Based Lighting (IBL) contribution
+ * --------------------------------------------------
+ * Samples HDRI environment maps for ambient lighting.
+ * Combines diffuse (irradiance) and specular (prefiltered) components.
+ *
+ * DIFFUSE IBL:
+ *   - Irradiance map: Pre-convolved diffuse lighting from all directions
+ *   - Lambertian BRDF: Uniform hemispherical sampling
+ *   - Result: Soft ambient base color
+ *
+ * SPECULAR IBL:
+ *   - Prefiltered environment map: Roughness-dependent reflections
+ *   - BRDF LUT: Split-sum approximation for Fresnel × Geometry
+ *   - Mip levels: Lower roughness = sharper reflections (higher mip)
+ *   - Result: Sharp to blurry reflections based on roughness
+ *
+ * SPLIT-SUM APPROXIMATION:
+ *   Instead of: ∫ L(l) * BRDF(l,v) * cos(θ) dl
+ *   We compute: ∫ L(l) * cos(θ) dl  ×  ∫ BRDF(l,v) * cos(θ) dl
+ *   First integral: Prefiltered environment map (depends on roughness)
+ *   Second integral: BRDF LUT (depends on roughness, NdotV)
+ *
+ * Parameters:
+ *   N = Surface normal
+ *   V = View direction (surface to camera)
+ *   R = Reflection vector
+ *   F0 = Fresnel reflectance at normal incidence
+ *   roughness = Surface roughness [0=smooth, 1=rough]
+ *   metallic = Metallic factor [0=dielectric, 1=metal]
+ *   albedo = Surface albedo/base color
+ *
+ * Returns: IBL ambient lighting contribution (diffuse + specular)
+ */
+vec3 calculateIBL(vec3 N, vec3 V, vec3 R, vec3 F0, float roughness, float metallic, vec3 albedo) {
+    // ───────────────────────────────────────────────────────────
+    // STEP 1: Apply Y-axis rotation to align HDRI with scene
+    // ───────────────────────────────────────────────────────────
+    vec3 N_rotated = rotateY(N, ibl.rotation_y);
+    vec3 R_rotated = rotateY(R, ibl.rotation_y);
+
+    // ───────────────────────────────────────────────────────────
+    // STEP 2: Sample diffuse irradiance (pre-convolved)
+    // ───────────────────────────────────────────────────────────
+    // Irradiance map contains incoming light from all directions,
+    // pre-convolved with Lambertian BRDF (cosine-weighted hemisphere)
+    vec3 irradiance = texture(iblIrradiance, N_rotated).rgb;
+
+    // ───────────────────────────────────────────────────────────
+    // STEP 3: Sample specular prefiltered environment
+    // ───────────────────────────────────────────────────────────
+    // Prefiltered map has multiple mip levels:
+    // - Mip 0 (roughness=0): Sharp, mirror-like reflections
+    // - Mip N (roughness=1): Blurry, diffuse-like reflections
+    float lod = roughness * ibl.max_reflection_lod;
+    vec3 prefilteredColor = textureLod(iblPrefiltered, R_rotated, lod).rgb;
+
+    // ───────────────────────────────────────────────────────────
+    // STEP 4: Sample BRDF integration LUT
+    // ───────────────────────────────────────────────────────────
+    // BRDF LUT contains pre-integrated Fresnel × Geometry term
+    // X-axis: NdotV (grazing angle)
+    // Y-axis: roughness
+    // R channel: Scale factor for F0
+    // G channel: Bias term
+    float NdotV = max(dot(N, V), 0.0);
+    vec2 envBRDF = texture(iblBRDF, vec2(NdotV, roughness)).rg;
+
+    // ───────────────────────────────────────────────────────────
+    // STEP 5: Calculate Fresnel for IBL (roughness-aware)
+    // ───────────────────────────────────────────────────────────
+    // Rough surfaces reflect less at grazing angles
+    vec3 F = F_SchlickRoughness(F0, V, N, roughness);
+
+    // ───────────────────────────────────────────────────────────
+    // STEP 6: Energy conservation (diffuse + specular = 1)
+    // ───────────────────────────────────────────────────────────
+    vec3 kS = F;  // Specular contribution (Fresnel)
+    vec3 kD = vec3(1.0) - kS;  // Diffuse contribution (1 - specular)
+    kD *= (1.0 - metallic);  // Metals have no diffuse
+
+    // ───────────────────────────────────────────────────────────
+    // STEP 7: Combine diffuse and specular IBL
+    // ───────────────────────────────────────────────────────────
+    // Diffuse: Irradiance × albedo × energy conservation
+    vec3 diffuse = irradiance * albedo * kD;
+
+    // Specular: Prefiltered color × (F0 × scale + bias)
+    // This is the split-sum approximation result
+    vec3 specular = prefilteredColor * (F0 * envBRDF.x + envBRDF.y);
+
+    // Total IBL contribution (diffuse + specular)
+    vec3 iblContribution = (diffuse + specular) * ibl.intensity;
+
+    return iblContribution;
+}
+
+// ═══════════════════════════════════════════════════════════════
 // LIGHT CALCULATION FUNCTIONS
 // ═══════════════════════════════════════════════════════════════
 
@@ -916,10 +1054,18 @@ void main() {
     }
 
     // ───────────────────────────────────────────────────────────
-    // STEP 5: Add ambient lighting
+    // STEP 5: Calculate Image-Based Lighting (IBL) for ambient
     // ───────────────────────────────────────────────────────────
-    // Simple ambient term (in a full engine, this would be IBL)
-    vec3 ambient = vec3(0.03) * albedo * ao;
+    // Calculate reflection vector for specular IBL
+    vec3 R = reflect(-V, N);
+
+    // Sample HDRI environment for physically-based ambient lighting
+    // Combines diffuse irradiance and specular reflections
+    vec3 iblAmbient = calculateIBL(N, V, R, F0, roughness, metallic, albedo);
+
+    // Apply ambient occlusion to IBL (darkens crevices/corners)
+    // AO reduces ambient light in occluded areas
+    vec3 ambient = iblAmbient * ao;
 
     // ───────────────────────────────────────────────────────────
     // STEP 6: Add emissive contribution
@@ -980,6 +1126,11 @@ void main() {
  * ✓ Transmittance (wavelength-dependent light attenuation)
  * ✓ In-Scattering (aerial perspective, distance fog)
  * ✓ LUT-based Atmospheric Sampling (256×64 transmittance, 200×128×32 scattering)
+ * ✓ Image-Based Lighting (IBL) - HDRI environment maps
+ * ✓ IBL Diffuse - Pre-convolved irradiance maps
+ * ✓ IBL Specular - Roughness-dependent reflections with split-sum approximation
+ * ✓ BRDF Integration LUT - Pre-computed Fresnel × Geometry term
+ * ✓ HDRI Rotation - Y-axis rotation for sun alignment
  *
  * ATMOSPHERIC EFFECTS:
  * --------------------
@@ -990,6 +1141,15 @@ void main() {
  * - Sun angle affects scattering color (noon vs sunset)
  * - Supports multiple planet atmospheres (Earth, Mars, etc.)
  *
+ * IBL EFFECTS:
+ * ------------
+ * - Photorealistic ambient lighting from HDRI environments
+ * - Sharp metallic reflections (roughness = 0)
+ * - Blurry diffuse-like reflections (roughness = 1)
+ * - Energy-conserving diffuse/specular split
+ * - Automatic sun alignment with atmospheric sun
+ * - Hybrid mode: HDRI base + atmospheric fog overlay
+ *
  * FUTURE ENHANCEMENTS:
  * --------------------
  * 1. Point Light Shadows: Cubemap shadow maps for omnidirectional shadows
@@ -997,11 +1157,11 @@ void main() {
  * 3. Contact-Hardening Shadows: Variable penumbra width based on blocker distance
  * 4. PCSS (Percentage-Closer Soft Shadows): More realistic soft shadows
  * 5. VSM/ESM: Variance/Exponential shadow maps for better filtering
- * 6. IBL (Image-Based Lighting): Use environment maps for ambient
- * 7. SSAO: Screen-space ambient occlusion for better ambient
- * 8. Subsurface Scattering: For skin, wax, translucent materials
- * 9. Clearcoat: For car paint, lacquer, multi-layer materials
- * 10. Anisotropic Highlights: For brushed metal, hair, fabric
- * 11. Volumetric Atmospheric Effects: God rays, light shafts
- * 12. Cloud Shadows: Dynamic cloud coverage affecting light transmission
+ * 6. SSAO: Screen-space ambient occlusion for better ambient detail
+ * 7. Subsurface Scattering: For skin, wax, translucent materials
+ * 8. Clearcoat: For car paint, lacquer, multi-layer materials
+ * 9. Anisotropic Highlights: For brushed metal, hair, fabric
+ * 10. Volumetric Atmospheric Effects: God rays, light shafts
+ * 11. Cloud Shadows: Dynamic cloud coverage affecting light transmission
+ * 12. Dynamic Skybox: Real-time cloud rendering and sky color transitions
  */
