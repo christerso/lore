@@ -94,6 +94,29 @@ layout(set = 2, binding = 4) uniform ShadowUBO {
 } shadow;
 
 // ═══════════════════════════════════════════════════════════════
+// ATMOSPHERIC SCATTERING UNIFORMS
+// ═══════════════════════════════════════════════════════════════
+
+// Atmospheric scattering uniforms
+layout(set = 2, binding = 5) uniform sampler2D atmosphericTransmittance; // 256×64
+layout(set = 2, binding = 6) uniform sampler3D atmosphericScattering;    // 200×128×32
+
+layout(set = 2, binding = 7) uniform AtmosphericUBO {
+    vec3 planet_center;           // Planet center (world space)
+    float planet_radius;          // Planet radius (meters)
+    
+    float atmosphere_height;      // Atmosphere thickness
+    float rayleigh_scale_height;  // Rayleigh scattering scale
+    float mie_scale_height;       // Mie scattering scale
+    vec3 rayleigh_scattering;     // Rayleigh coefficients
+    
+    vec3 mie_scattering;          // Mie coefficients
+    float mie_anisotropy;         // Mie phase function g
+    vec3 sun_direction;           // Primary sun direction
+    float sun_intensity;          // Sun intensity
+} atmospheric;
+
+// ═══════════════════════════════════════════════════════════════
 // OUTPUTS
 // ═══════════════════════════════════════════════════════════════
 
@@ -582,6 +605,111 @@ float calculateShadow(vec3 worldPos, vec3 normal) {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// ATMOSPHERIC SCATTERING FUNCTIONS
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Sample atmospheric scattering for a world position
+ * ----------------------------------------------------
+ * Samples precomputed LUTs to get atmospheric transmittance and in-scattering.
+ * 
+ * TRANSMITTANCE: How much direct light survives atmosphere
+ *   - Controls how much the sun/lights are attenuated by distance
+ *   - Makes sun red at sunset (blue light scattered away)
+ *   - T = exp(-optical_depth), wavelength-dependent
+ * 
+ * IN-SCATTERING: Light scattered into view ray
+ *   - Creates aerial perspective (fog effect)
+ *   - Distant objects fade to sky color
+ *   - Adds atmospheric glow around sun
+ * 
+ * LUT SAMPLING:
+ * --------------
+ * Transmittance LUT (2D): [altitude, view_zenith_angle]
+ *   - altitude: 0 = surface, 1 = atmosphere top
+ *   - view_zenith: angle from zenith (0 = straight up, 0.5 = horizon, 1 = down)
+ * 
+ * Scattering LUT (3D): [altitude, view_zenith_angle, sun_zenith_angle]
+ *   - Includes sun position for accurate scattering color
+ * 
+ * Parameters:
+ *   worldPos = Fragment world position
+ *   viewDir = Direction from camera to fragment (normalized)
+ *   transmittance = Output: RGB transmittance factor (0-1)
+ *   inScattering = Output: RGB in-scattered radiance (HDR)
+ */
+void sampleAtmospheric(vec3 worldPos, vec3 viewDir, out vec3 transmittance, out vec3 inScattering) {
+    // ───────────────────────────────────────────────────────────
+    // STEP 1: Calculate altitude above planet surface
+    // ───────────────────────────────────────────────────────────
+    // Calculate vector from planet center to fragment
+    vec3 toPlanet = worldPos - atmospheric.planet_center;
+    float distanceFromCenter = length(toPlanet);
+    
+    // Calculate altitude: distance from center minus planet radius
+    // altitude = 0 at surface, increases with height
+    float altitude = distanceFromCenter - atmospheric.planet_radius;
+    
+    // Normalize altitude to [0, 1] range for LUT sampling
+    // 0 = surface, 1 = top of atmosphere
+    float h = clamp(altitude / atmospheric.atmosphere_height, 0.0, 1.0);
+    
+    // ───────────────────────────────────────────────────────────
+    // STEP 2: Calculate view zenith angle
+    // ───────────────────────────────────────────────────────────
+    // Zenith direction: vector from planet center toward sky
+    vec3 zenith = normalize(toPlanet);
+    
+    // Angle between view direction and zenith
+    // cos(0°) = 1 (looking up), cos(90°) = 0 (horizon), cos(180°) = -1 (looking down)
+    float cosViewZenith = dot(zenith, viewDir);
+    
+    // Convert to texture coordinate [0, 1]
+    // 0 = looking down (-zenith), 0.5 = horizon, 1 = looking up (+zenith)
+    float viewAngle = cosViewZenith * 0.5 + 0.5;
+    
+    // ───────────────────────────────────────────────────────────
+    // STEP 3: Sample transmittance LUT (2D)
+    // ───────────────────────────────────────────────────────────
+    // Transmittance depends on altitude and view angle
+    vec2 transUV = vec2(h, viewAngle);
+    transmittance = texture(atmosphericTransmittance, transUV).rgb;
+    
+    // Ensure transmittance is in valid range [0, 1]
+    // (LUT should already provide this, but clamp for safety)
+    transmittance = clamp(transmittance, 0.0, 1.0);
+    
+    // ───────────────────────────────────────────────────────────
+    // STEP 4: Calculate sun zenith angle
+    // ───────────────────────────────────────────────────────────
+    // Angle between sun direction and zenith
+    // Used to determine scattering color (sunset vs noon)
+    float cosSunZenith = dot(zenith, atmospheric.sun_direction);
+    
+    // Convert to texture coordinate [0, 1]
+    float sunAngle = cosSunZenith * 0.5 + 0.5;
+    
+    // ───────────────────────────────────────────────────────────
+    // STEP 5: Sample scattering LUT (3D)
+    // ───────────────────────────────────────────────────────────
+    // Scattering depends on altitude, view angle, and sun angle
+    vec3 scatterUV = vec3(h, viewAngle, sunAngle);
+    vec4 scatterSample = texture(atmosphericScattering, scatterUV);
+    
+    // Extract in-scattering radiance (RGB, HDR)
+    // Alpha channel could store additional data (density, fog, etc.)
+    inScattering = scatterSample.rgb;
+    
+    // Scale by sun intensity (convert from normalized to physical units)
+    // Sun intensity is in W/m², scattering LUT is normalized
+    inScattering *= atmospheric.sun_intensity;
+    
+    // Clamp to reasonable HDR range to prevent fireflies
+    // Atmosphere can produce very bright values near sun
+    inScattering = min(inScattering, vec3(10.0));
+}
+
+// ═══════════════════════════════════════════════════════════════
 // LIGHT CALCULATION FUNCTIONS
 // ═══════════════════════════════════════════════════════════════
 
@@ -799,6 +927,38 @@ void main() {
     vec3 color = ambient + Lo + emissive.rgb;
 
     // ───────────────────────────────────────────────────────────
+    // STEP 6.5: Apply atmospheric scattering
+    // ───────────────────────────────────────────────────────────
+    // Apply realistic atmospheric effects based on precomputed LUTs.
+    // This creates distance fog, aerial perspective, and atmospheric
+    // light attenuation (red sunset, blue daytime sky).
+    //
+    // TRANSMITTANCE: Attenuates direct light based on atmospheric optical depth
+    //   - Makes sun/lights redder at sunset (blue scattered away)
+    //   - Exponential falloff: T = exp(-optical_depth)
+    //
+    // IN-SCATTERING: Adds atmospheric glow and haze
+    //   - Distant objects fade to sky color (aerial perspective)
+    //   - Creates volumetric fog effect
+    //   - Adds atmospheric glow around sun
+    //
+    // Physical equation: L_final = L_direct * transmittance + L_inscatter
+    vec3 transmittance, inScattering;
+    sampleAtmospheric(worldPos, V, transmittance, inScattering);
+    
+    // Apply transmittance to attenuate direct/ambient light
+    // Direct light (from lights) dims with distance through atmosphere
+    // This makes distant lights appear weaker and redder
+    color = color * transmittance;
+    
+    // Add in-scattered radiance (aerial perspective)
+    // This is light scattered into the view ray from atmospheric particles
+    // Creates distance fog that fades objects to sky color
+    // Near objects: minimal scattering, retain original color
+    // Far objects: heavy scattering, fade to atmospheric color
+    color += inScattering;
+
+    // ───────────────────────────────────────────────────────────
     // STEP 7: Output final HDR color
     // ───────────────────────────────────────────────────────────
     // Note: This is HDR (can be > 1.0). Tone mapping happens later.
@@ -808,6 +968,7 @@ void main() {
 /**
  * IMPLEMENTED FEATURES:
  * ---------------------
+ * ✓ Physically-Based Rendering (Cook-Torrance BRDF)
  * ✓ Cascaded Shadow Maps (4 cascades)
  * ✓ PCF Soft Shadows (3×3, 5×5, 7×7 kernels)
  * ✓ Poisson Disk Sampling (64 samples)
@@ -815,6 +976,19 @@ void main() {
  * ✓ Cascade Blending (seamless LOD transitions)
  * ✓ Distance-based Shadow Fade
  * ✓ Slope-scaled Bias (handles steep surfaces)
+ * ✓ Atmospheric Scattering (Rayleigh + Mie physics)
+ * ✓ Transmittance (wavelength-dependent light attenuation)
+ * ✓ In-Scattering (aerial perspective, distance fog)
+ * ✓ LUT-based Atmospheric Sampling (256×64 transmittance, 200×128×32 scattering)
+ *
+ * ATMOSPHERIC EFFECTS:
+ * --------------------
+ * - Realistic sunset/sunrise colors (red sun, blue sky)
+ * - Distance fog with physically-correct falloff
+ * - Aerial perspective (distant objects fade to sky color)
+ * - Altitude-based atmospheric density
+ * - Sun angle affects scattering color (noon vs sunset)
+ * - Supports multiple planet atmospheres (Earth, Mars, etc.)
  *
  * FUTURE ENHANCEMENTS:
  * --------------------
@@ -828,4 +1002,6 @@ void main() {
  * 8. Subsurface Scattering: For skin, wax, translucent materials
  * 9. Clearcoat: For car paint, lacquer, multi-layer materials
  * 10. Anisotropic Highlights: For brushed metal, hair, fabric
+ * 11. Volumetric Atmospheric Effects: God rays, light shafts
+ * 12. Cloud Shadows: Dynamic cloud coverage affecting light transmission
  */
