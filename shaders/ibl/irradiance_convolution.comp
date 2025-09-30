@@ -1,0 +1,116 @@
+#version 450
+
+// Irradiance Convolution Compute Shader
+// Generates diffuse irradiance map by convolving environment map over hemisphere
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 5) uniform samplerCube environmentMap;
+layout(set = 0, binding = 2, rgba16f) uniform writeonly imageCube irradianceMap;
+
+layout(push_constant) uniform PushConstants {
+    uint sampleCount; // Number of samples per pixel (e.g., 1024)
+} pc;
+
+const float PI = 3.14159265359;
+const float TWO_PI = 6.28318530718;
+
+// Convert cubemap face coordinates to world-space direction vector
+vec3 get_cubemap_direction(uint face, vec2 uv) {
+    vec2 st = uv * 2.0 - 1.0;
+
+    vec3 direction;
+
+    switch (face) {
+        case 0: direction = vec3(1.0, -st.y, -st.x); break;
+        case 1: direction = vec3(-1.0, -st.y, st.x); break;
+        case 2: direction = vec3(st.x, 1.0, st.y); break;
+        case 3: direction = vec3(st.x, -1.0, -st.y); break;
+        case 4: direction = vec3(st.x, -st.y, 1.0); break;
+        case 5: direction = vec3(-st.x, -st.y, -1.0); break;
+    }
+
+    return normalize(direction);
+}
+
+// Construct orthonormal basis from normal vector
+mat3 build_tangent_space(vec3 N) {
+    vec3 up = abs(N.z) < 0.999 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
+    vec3 tangent = normalize(cross(up, N));
+    vec3 bitangent = cross(N, tangent);
+    return mat3(tangent, bitangent, N);
+}
+
+// Hammersley sequence for low-discrepancy sampling
+vec2 hammersley(uint i, uint N) {
+    uint bits = i;
+    bits = (bits << 16u) | (bits >> 16u);
+    bits = ((bits & 0x55555555u) << 1u) | ((bits & 0xAAAAAAAAu) >> 1u);
+    bits = ((bits & 0x33333333u) << 2u) | ((bits & 0xCCCCCCCCu) >> 2u);
+    bits = ((bits & 0x0F0F0F0Fu) << 4u) | ((bits & 0xF0F0F0F0u) >> 4u);
+    bits = ((bits & 0x00FF00FFu) << 8u) | ((bits & 0xFF00FF00u) >> 8u);
+    float rdi = float(bits) * 2.3283064365386963e-10; // 1/0x100000000
+    return vec2(float(i) / float(N), rdi);
+}
+
+// Hemisphere importance sampling (cosine-weighted)
+vec3 sample_hemisphere_cosine(vec2 Xi) {
+    float phi = TWO_PI * Xi.x;
+    float cos_theta = sqrt(1.0 - Xi.y);
+    float sin_theta = sqrt(Xi.y);
+
+    return vec3(cos(phi) * sin_theta, sin(phi) * sin_theta, cos_theta);
+}
+
+void main() {
+    ivec2 irradiance_size = imageSize(irradianceMap);
+    ivec2 pixel_coords = ivec2(gl_GlobalInvocationID.xy);
+    uint face_index = gl_GlobalInvocationID.z;
+
+    // Bounds check
+    if (pixel_coords.x >= irradiance_size.x || pixel_coords.y >= irradiance_size.y || face_index >= 6) {
+        return;
+    }
+
+    // Normalize pixel coordinates to [0, 1]
+    vec2 uv = (vec2(pixel_coords) + 0.5) / vec2(irradiance_size);
+
+    // Get normal direction for this irradiance pixel
+    vec3 N = get_cubemap_direction(face_index, uv);
+
+    // Build tangent space for hemisphere sampling
+    mat3 tangent_to_world = build_tangent_space(N);
+
+    // Convolve environment map over hemisphere
+    vec3 irradiance = vec3(0.0);
+    float total_weight = 0.0;
+
+    uint sample_count = pc.sampleCount;
+
+    for (uint i = 0u; i < sample_count; ++i) {
+        // Generate low-discrepancy sample
+        vec2 Xi = hammersley(i, sample_count);
+
+        // Sample hemisphere with cosine weighting
+        vec3 local_dir = sample_hemisphere_cosine(Xi);
+        vec3 world_dir = tangent_to_world * local_dir;
+
+        // Cosine term (already weighted in sampling, but for clarity)
+        float NdotL = max(dot(N, world_dir), 0.0);
+
+        // Sample environment map
+        vec3 sample_color = texture(environmentMap, world_dir).rgb;
+
+        // Accumulate with cosine weighting
+        irradiance += sample_color * NdotL;
+        total_weight += NdotL;
+    }
+
+    // Average and apply PI factor for Lambertian diffuse
+    if (total_weight > 0.0) {
+        irradiance = (irradiance / total_weight) * PI;
+    }
+
+    // Write irradiance to output
+    imageStore(irradianceMap, ivec3(pixel_coords, face_index), vec4(irradiance, 1.0));
+}
