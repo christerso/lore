@@ -1,0 +1,149 @@
+#version 450
+
+/**
+ * Fire Advection Compute Shader
+ * =============================
+ *
+ * Implements semi-Lagrangian advection for fire simulation.
+ * Moves velocity, density, and temperature through the velocity field.
+ *
+ * Based on Jos Stam's "Stable Fluids" paper with MacCormack correction
+ * for reduced numerical dissipation.
+ *
+ * References:
+ * - Jos Stam, "Stable Fluids" (1999)
+ * - MacCormack advection scheme for reduced dissipation
+ */
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
+
+// Input textures (3D)
+layout(binding = 0, rgba32f) uniform readonly image3D velocity_field;
+layout(binding = 1, r32f) uniform readonly image3D density_field;
+layout(binding = 2, r32f) uniform readonly image3D temperature_field;
+
+// Output textures (3D)
+layout(binding = 3, rgba32f) uniform writeonly image3D velocity_out;
+layout(binding = 4, r32f) uniform writeonly image3D density_out;
+layout(binding = 5, r32f) uniform writeonly image3D temperature_out;
+
+// Push constants
+layout(push_constant) uniform PushConstants {
+    float delta_time;           // Time step (seconds)
+    float dissipation;          // Dissipation factor (0-1)
+    float cell_size;            // Grid cell size (meters)
+    int use_maccormack;         // Use MacCormack correction (0/1)
+    ivec3 grid_resolution;      // Grid dimensions
+    float maccormack_strength;  // MacCormack correction strength (0-1)
+} push;
+
+// Trilinear interpolation for vec3 field
+vec3 sample_velocity(vec3 pos) {
+    // Clamp to grid bounds
+    pos = clamp(pos, vec3(0.5), vec3(push.grid_resolution) - 0.5);
+
+    // Get integer and fractional parts
+    ivec3 i0 = ivec3(floor(pos));
+    ivec3 i1 = min(i0 + ivec3(1), push.grid_resolution - ivec3(1));
+    vec3 f = fract(pos);
+
+    // Sample 8 corners of the cube
+    vec3 v000 = imageLoad(velocity_field, i0).xyz;
+    vec3 v100 = imageLoad(velocity_field, ivec3(i1.x, i0.y, i0.z)).xyz;
+    vec3 v010 = imageLoad(velocity_field, ivec3(i0.x, i1.y, i0.z)).xyz;
+    vec3 v110 = imageLoad(velocity_field, ivec3(i1.x, i1.y, i0.z)).xyz;
+    vec3 v001 = imageLoad(velocity_field, ivec3(i0.x, i0.y, i1.z)).xyz;
+    vec3 v101 = imageLoad(velocity_field, ivec3(i1.x, i0.y, i1.z)).xyz;
+    vec3 v011 = imageLoad(velocity_field, ivec3(i0.x, i1.y, i1.z)).xyz;
+    vec3 v111 = imageLoad(velocity_field, i1).xyz;
+
+    // Trilinear interpolation
+    vec3 v00 = mix(v000, v100, f.x);
+    vec3 v01 = mix(v001, v101, f.x);
+    vec3 v10 = mix(v010, v110, f.x);
+    vec3 v11 = mix(v011, v111, f.x);
+    vec3 v0 = mix(v00, v10, f.y);
+    vec3 v1 = mix(v01, v11, f.y);
+    return mix(v0, v1, f.z);
+}
+
+// Trilinear interpolation for scalar field
+float sample_scalar(image3D field, vec3 pos) {
+    pos = clamp(pos, vec3(0.5), vec3(push.grid_resolution) - 0.5);
+
+    ivec3 i0 = ivec3(floor(pos));
+    ivec3 i1 = min(i0 + ivec3(1), push.grid_resolution - ivec3(1));
+    vec3 f = fract(pos);
+
+    float v000 = imageLoad(field, i0).r;
+    float v100 = imageLoad(field, ivec3(i1.x, i0.y, i0.z)).r;
+    float v010 = imageLoad(field, ivec3(i0.x, i1.y, i0.z)).r;
+    float v110 = imageLoad(field, ivec3(i1.x, i1.y, i0.z)).r;
+    float v001 = imageLoad(field, ivec3(i0.x, i0.y, i1.z)).r;
+    float v101 = imageLoad(field, ivec3(i1.x, i0.y, i1.z)).r;
+    float v011 = imageLoad(field, ivec3(i0.x, i1.y, i1.z)).r;
+    float v111 = imageLoad(field, i1).r;
+
+    float v00 = mix(v000, v100, f.x);
+    float v01 = mix(v001, v101, f.x);
+    float v10 = mix(v010, v110, f.x);
+    float v11 = mix(v011, v111, f.x);
+    float v0 = mix(v00, v10, f.y);
+    float v1 = mix(v01, v11, f.y);
+    return mix(v0, v1, f.z);
+}
+
+void main() {
+    ivec3 cell = ivec3(gl_GlobalInvocationID.xyz);
+
+    // Bounds check
+    if (any(greaterThanEqual(cell, push.grid_resolution))) {
+        return;
+    }
+
+    vec3 pos = vec3(cell) + vec3(0.5);  // Cell center
+
+    // Read current velocity at this cell
+    vec3 velocity = imageLoad(velocity_field, cell).xyz;
+
+    // Semi-Lagrangian advection: trace particle backwards
+    vec3 back_pos = pos - velocity * push.delta_time / push.cell_size;
+
+    // Sample fields at back-traced position
+    vec3 advected_velocity = sample_velocity(back_pos);
+    float advected_density = sample_scalar(density_field, back_pos);
+    float advected_temperature = sample_scalar(temperature_field, back_pos);
+
+    // MacCormack correction (reduces numerical dissipation)
+    if (push.use_maccormack != 0) {
+        // Forward advection
+        vec3 forward_pos = pos + advected_velocity * push.delta_time / push.cell_size;
+        vec3 forward_velocity = sample_velocity(forward_pos);
+        float forward_density = sample_scalar(density_field, forward_pos);
+        float forward_temperature = sample_scalar(temperature_field, forward_pos);
+
+        // Error estimation
+        vec3 vel_error = (velocity - forward_velocity) * push.maccormack_strength;
+        float dens_error = (imageLoad(density_field, cell).r - forward_density) * push.maccormack_strength;
+        float temp_error = (imageLoad(temperature_field, cell).r - forward_temperature) * push.maccormack_strength;
+
+        // Corrected values
+        advected_velocity += vel_error;
+        advected_density += dens_error;
+        advected_temperature += temp_error;
+    }
+
+    // Apply dissipation
+    advected_velocity *= push.dissipation;
+    advected_density *= push.dissipation;
+    advected_temperature *= push.dissipation;
+
+    // Clamp values to valid range
+    advected_density = max(0.0, advected_density);
+    advected_temperature = max(0.0, advected_temperature);
+
+    // Write output
+    imageStore(velocity_out, cell, vec4(advected_velocity, 0.0));
+    imageStore(density_out, cell, vec4(advected_density));
+    imageStore(temperature_out, cell, vec4(advected_temperature));
+}

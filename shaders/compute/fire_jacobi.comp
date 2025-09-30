@@ -1,0 +1,90 @@
+#version 450
+
+/**
+ * Fire Jacobi Pressure Solver Compute Shader
+ * ===========================================
+ *
+ * Iteratively solves the Poisson equation for pressure:
+ * ∇²p = ∇·u
+ *
+ * Uses Jacobi iteration with successive over-relaxation (SOR).
+ * Typically run 40-50 iterations for convergence.
+ *
+ * Jacobi update:
+ * p_new[i,j,k] = (p[i-1,j,k] + p[i+1,j,k] +
+ *                  p[i,j-1,k] + p[i,j+1,k] +
+ *                  p[i,j,k-1] + p[i,j,k+1] - div[i,j,k]) / 6
+ *
+ * With over-relaxation:
+ * p[i,j,k] = ω * p_new + (1-ω) * p_old
+ */
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
+
+// Input pressure field (from previous iteration)
+layout(binding = 0, r32f) uniform readonly image3D pressure_in;
+
+// Input divergence field (constant throughout iterations)
+layout(binding = 1, r32f) uniform readonly image3D divergence_field;
+
+// Output pressure field (updated)
+layout(binding = 2, r32f) uniform writeonly image3D pressure_out;
+
+// Push constants
+layout(push_constant) uniform PushConstants {
+    ivec3 grid_resolution;      // Grid dimensions
+    float cell_size;            // Grid cell size (meters)
+    float relaxation_factor;    // Over-relaxation (1.0 = Jacobi, 1.0-2.0 = SOR)
+} push;
+
+void main() {
+    ivec3 cell = ivec3(gl_GlobalInvocationID.xyz);
+
+    // Bounds check
+    if (any(greaterThanEqual(cell, push.grid_resolution))) {
+        return;
+    }
+
+    ivec3 res = push.grid_resolution;
+
+    // Boundary conditions: pressure = 0 at walls
+    if (cell.x == 0 || cell.x == res.x - 1 ||
+        cell.y == 0 || cell.y == res.y - 1 ||
+        cell.z == 0 || cell.z == res.z - 1) {
+        imageStore(pressure_out, cell, vec4(0.0));
+        return;
+    }
+
+    // Get neighboring cells
+    ivec3 xp = cell + ivec3(1,0,0);
+    ivec3 xn = cell - ivec3(1,0,0);
+    ivec3 yp = cell + ivec3(0,1,0);
+    ivec3 yn = cell - ivec3(0,1,0);
+    ivec3 zp = cell + ivec3(0,0,1);
+    ivec3 zn = cell - ivec3(0,0,1);
+
+    // Sample pressure at neighbors
+    float pxp = imageLoad(pressure_in, xp).r;
+    float pxn = imageLoad(pressure_in, xn).r;
+    float pyp = imageLoad(pressure_in, yp).r;
+    float pyn = imageLoad(pressure_in, yn).r;
+    float pzp = imageLoad(pressure_in, zp).r;
+    float pzn = imageLoad(pressure_in, zn).r;
+
+    // Sample divergence at this cell
+    float div = imageLoad(divergence_field, cell).r;
+
+    // Jacobi iteration
+    // p_new = (sum of neighbors - α² * b) / β
+    // For Poisson equation: α = cell_size, β = 6
+    float alpha_sq = push.cell_size * push.cell_size;
+    float p_jacobi = (pxp + pxn + pyp + pyn + pzp + pzn - alpha_sq * div) / 6.0;
+
+    // Successive over-relaxation (SOR)
+    // p_new = ω * p_jacobi + (1-ω) * p_old
+    float p_old = imageLoad(pressure_in, cell).r;
+    float p_new = push.relaxation_factor * p_jacobi + (1.0 - push.relaxation_factor) * p_old;
+
+    // Write output
+    imageStore(pressure_out, cell, vec4(p_new));
+}

@@ -1,0 +1,72 @@
+#version 450
+
+/**
+ * Fire Divergence Compute Shader
+ * ===============================
+ *
+ * Calculates the divergence of the velocity field.
+ * Used as input to the pressure solver (Jacobi iterations).
+ *
+ * Divergence: ∇·u = ∂u/∂x + ∂v/∂y + ∂w/∂z
+ *
+ * For incompressible flow, we want ∇·u = 0
+ */
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
+
+// Input velocity field
+layout(binding = 0, rgba32f) uniform readonly image3D velocity_field;
+
+// Output divergence field
+layout(binding = 1, r32f) uniform writeonly image3D divergence_out;
+
+// Push constants
+layout(push_constant) uniform PushConstants {
+    ivec3 grid_resolution;  // Grid dimensions
+    float cell_size;        // Grid cell size (meters)
+} push;
+
+void main() {
+    ivec3 cell = ivec3(gl_GlobalInvocationID.xyz);
+
+    // Bounds check
+    if (any(greaterThanEqual(cell, push.grid_resolution))) {
+        return;
+    }
+
+    ivec3 res = push.grid_resolution;
+
+    // Get neighboring cells (clamped to bounds)
+    ivec3 xp = min(cell + ivec3(1,0,0), res - ivec3(1));
+    ivec3 xn = max(cell - ivec3(1,0,0), ivec3(0));
+    ivec3 yp = min(cell + ivec3(0,1,0), res - ivec3(1));
+    ivec3 yn = max(cell - ivec3(0,1,0), ivec3(0));
+    ivec3 zp = min(cell + ivec3(0,0,1), res - ivec3(1));
+    ivec3 zn = max(cell - ivec3(0,0,1), ivec3(0));
+
+    // Sample velocity at neighbors
+    vec3 vxp = imageLoad(velocity_field, xp).xyz;
+    vec3 vxn = imageLoad(velocity_field, xn).xyz;
+    vec3 vyp = imageLoad(velocity_field, yp).xyz;
+    vec3 vyn = imageLoad(velocity_field, yn).xyz;
+    vec3 vzp = imageLoad(velocity_field, zp).xyz;
+    vec3 vzn = imageLoad(velocity_field, zn).xyz;
+
+    // Central differences
+    float du_dx = (vxp.x - vxn.x) / (2.0 * push.cell_size);
+    float dv_dy = (vyp.y - vyn.y) / (2.0 * push.cell_size);
+    float dw_dz = (vzp.z - vzn.z) / (2.0 * push.cell_size);
+
+    // Divergence
+    float divergence = du_dx + dv_dy + dw_dz;
+
+    // Boundary conditions (solid walls have zero divergence)
+    if (cell.x == 0 || cell.x == res.x - 1 ||
+        cell.y == 0 || cell.y == res.y - 1 ||
+        cell.z == 0 || cell.z == res.z - 1) {
+        divergence = 0.0;
+    }
+
+    // Write output
+    imageStore(divergence_out, cell, vec4(divergence));
+}

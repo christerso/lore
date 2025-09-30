@@ -1,0 +1,161 @@
+#version 450
+
+/**
+ * Fire Add Force Compute Shader
+ * ==============================
+ *
+ * Applies external forces to the velocity field:
+ * - Buoyancy (hot air rises)
+ * - Gravity
+ * - Wind
+ * - Vorticity confinement (adds turbulence)
+ *
+ * Buoyancy force: F = (T - T_ambient) * buoyancy_coeff * g
+ */
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
+
+// Input/Output textures
+layout(binding = 0, rgba32f) uniform image3D velocity_field;
+layout(binding = 1, r32f) uniform readonly image3D temperature_field;
+layout(binding = 2, r32f) uniform readonly image3D density_field;
+layout(binding = 3, rgba32f) uniform readonly image3D vorticity_field;  // Optional
+
+// Push constants
+layout(push_constant) uniform PushConstants {
+    vec3 gravity;                  // Gravity vector (m/s²)
+    float delta_time;              // Time step (seconds)
+
+    float buoyancy_coefficient;    // Buoyancy strength
+    float ambient_temperature;     // Ambient temp (K)
+    float vorticity_strength;      // Turbulence strength (0-1)
+    int enable_vorticity;          // Enable vorticity confinement (0/1)
+
+    vec3 wind_velocity;            // Wind vector (m/s)
+    float wind_influence;          // Wind effect strength (0-1)
+
+    ivec3 grid_resolution;         // Grid dimensions
+    float cell_size;               // Grid cell size (meters)
+} push;
+
+// Calculate vorticity at cell (curl of velocity field)
+vec3 calculate_vorticity(ivec3 cell) {
+    ivec3 res = push.grid_resolution;
+
+    // Clamp neighbors to grid bounds
+    ivec3 xp = min(cell + ivec3(1,0,0), res - ivec3(1));
+    ivec3 xn = max(cell - ivec3(1,0,0), ivec3(0));
+    ivec3 yp = min(cell + ivec3(0,1,0), res - ivec3(1));
+    ivec3 yn = max(cell - ivec3(0,1,0), ivec3(0));
+    ivec3 zp = min(cell + ivec3(0,0,1), res - ivec3(1));
+    ivec3 zn = max(cell - ivec3(0,0,1), ivec3(0));
+
+    // Sample velocities
+    vec3 vxp = imageLoad(velocity_field, xp).xyz;
+    vec3 vxn = imageLoad(velocity_field, xn).xyz;
+    vec3 vyp = imageLoad(velocity_field, yp).xyz;
+    vec3 vyn = imageLoad(velocity_field, yn).xyz;
+    vec3 vzp = imageLoad(velocity_field, zp).xyz;
+    vec3 vzn = imageLoad(velocity_field, zn).xyz;
+
+    // Central differences
+    float dz_y = (vyp.z - vyn.z) / (2.0 * push.cell_size);
+    float dy_z = (vzp.y - vzn.y) / (2.0 * push.cell_size);
+
+    float dx_z = (vzp.x - vzn.x) / (2.0 * push.cell_size);
+    float dz_x = (vxp.z - vxn.z) / (2.0 * push.cell_size);
+
+    float dy_x = (vxp.y - vxn.y) / (2.0 * push.cell_size);
+    float dx_y = (vyp.x - vyn.x) / (2.0 * push.cell_size);
+
+    // Curl (vorticity) = ∇ × velocity
+    return vec3(
+        dz_y - dy_z,
+        dx_z - dz_x,
+        dy_x - dx_y
+    );
+}
+
+// Calculate vorticity confinement force
+vec3 calculate_vorticity_confinement(ivec3 cell, vec3 vorticity) {
+    ivec3 res = push.grid_resolution;
+
+    // Clamp neighbors
+    ivec3 xp = min(cell + ivec3(1,0,0), res - ivec3(1));
+    ivec3 xn = max(cell - ivec3(1,0,0), ivec3(0));
+    ivec3 yp = min(cell + ivec3(0,1,0), res - ivec3(1));
+    ivec3 yn = max(cell - ivec3(0,1,0), ivec3(0));
+    ivec3 zp = min(cell + ivec3(0,0,1), res - ivec3(1));
+    ivec3 zn = max(cell - ivec3(0,0,1), ivec3(0));
+
+    // Calculate magnitude of vorticity at neighbors
+    float mag_xp = length(imageLoad(vorticity_field, xp).xyz);
+    float mag_xn = length(imageLoad(vorticity_field, xn).xyz);
+    float mag_yp = length(imageLoad(vorticity_field, yp).xyz);
+    float mag_yn = length(imageLoad(vorticity_field, yn).xyz);
+    float mag_zp = length(imageLoad(vorticity_field, zp).xyz);
+    float mag_zn = length(imageLoad(vorticity_field, zn).xyz);
+
+    // Gradient of vorticity magnitude
+    vec3 grad = vec3(
+        (mag_xp - mag_xn) / (2.0 * push.cell_size),
+        (mag_yp - mag_yn) / (2.0 * push.cell_size),
+        (mag_zp - mag_zn) / (2.0 * push.cell_size)
+    );
+
+    float mag_grad = length(grad);
+    if (mag_grad < 1e-6) {
+        return vec3(0.0);
+    }
+
+    // Normalize gradient
+    vec3 N = grad / mag_grad;
+
+    // Vorticity confinement force: f = ε * h * (N × ω)
+    vec3 force = push.vorticity_strength * push.cell_size * cross(N, vorticity);
+    return force;
+}
+
+void main() {
+    ivec3 cell = ivec3(gl_GlobalInvocationID.xyz);
+
+    // Bounds check
+    if (any(greaterThanEqual(cell, push.grid_resolution))) {
+        return;
+    }
+
+    // Read current velocity and temperature
+    vec3 velocity = imageLoad(velocity_field, cell).xyz;
+    float temperature = imageLoad(temperature_field, cell).r;
+    float density = imageLoad(density_field, cell).r;
+
+    // Buoyancy force (hot air rises)
+    // F_buoyancy = (T - T_ambient) * α * g
+    float temp_diff = temperature - push.ambient_temperature;
+    vec3 buoyancy_force = temp_diff * push.buoyancy_coefficient * (-push.gravity);  // Negative gravity = up
+
+    // Apply buoyancy
+    velocity += buoyancy_force * push.delta_time;
+
+    // Apply gravity (to density/smoke)
+    velocity += push.gravity * push.delta_time * density * 0.1;  // Small gravity effect on smoke
+
+    // Apply wind
+    vec3 wind_force = (push.wind_velocity - velocity) * push.wind_influence;
+    velocity += wind_force * push.delta_time;
+
+    // Vorticity confinement (adds turbulence)
+    if (push.enable_vorticity != 0) {
+        vec3 vorticity = calculate_vorticity(cell);
+
+        // Store vorticity for next pass (if field exists)
+        // Note: This requires vorticity_field to be writable
+        // In practice, we'd use a separate compute pass to calculate vorticity
+
+        vec3 confinement_force = calculate_vorticity_confinement(cell, vorticity);
+        velocity += confinement_force * push.delta_time;
+    }
+
+    // Write updated velocity
+    imageStore(velocity_field, cell, vec4(velocity, 0.0));
+}

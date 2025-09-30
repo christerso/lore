@@ -1,0 +1,84 @@
+#version 450
+
+/**
+ * Fire Projection Compute Shader
+ * ===============================
+ *
+ * Projects the velocity field to make it divergence-free.
+ * This enforces incompressibility (mass conservation).
+ *
+ * Projection step (Helmholtz decomposition):
+ * u_new = u - ∇p
+ *
+ * Where p is the pressure field solved by Jacobi iterations.
+ * After projection, ∇·u_new = 0 (divergence-free)
+ */
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
+
+// Input velocity field (with divergence)
+layout(binding = 0, rgba32f) uniform readonly image3D velocity_in;
+
+// Input pressure field (from Jacobi solver)
+layout(binding = 1, r32f) uniform readonly image3D pressure_field;
+
+// Output velocity field (divergence-free)
+layout(binding = 2, rgba32f) uniform writeonly image3D velocity_out;
+
+// Push constants
+layout(push_constant) uniform PushConstants {
+    ivec3 grid_resolution;  // Grid dimensions
+    float cell_size;        // Grid cell size (meters)
+} push;
+
+void main() {
+    ivec3 cell = ivec3(gl_GlobalInvocationID.xyz);
+
+    // Bounds check
+    if (any(greaterThanEqual(cell, push.grid_resolution))) {
+        return;
+    }
+
+    ivec3 res = push.grid_resolution;
+
+    // Read current velocity
+    vec3 velocity = imageLoad(velocity_in, cell).xyz;
+
+    // Boundary conditions: enforce no-slip at walls
+    if (cell.x == 0 || cell.x == res.x - 1 ||
+        cell.y == 0 || cell.y == res.y - 1 ||
+        cell.z == 0 || cell.z == res.z - 1) {
+        // Zero velocity at boundaries (solid walls)
+        imageStore(velocity_out, cell, vec4(0.0, 0.0, 0.0, 0.0));
+        return;
+    }
+
+    // Get neighboring cells
+    ivec3 xp = min(cell + ivec3(1,0,0), res - ivec3(1));
+    ivec3 xn = max(cell - ivec3(1,0,0), ivec3(0));
+    ivec3 yp = min(cell + ivec3(0,1,0), res - ivec3(1));
+    ivec3 yn = max(cell - ivec3(0,1,0), ivec3(0));
+    ivec3 zp = min(cell + ivec3(0,0,1), res - ivec3(1));
+    ivec3 zn = max(cell - ivec3(0,0,1), ivec3(0));
+
+    // Sample pressure at neighbors
+    float pxp = imageLoad(pressure_field, xp).r;
+    float pxn = imageLoad(pressure_field, xn).r;
+    float pyp = imageLoad(pressure_field, yp).r;
+    float pyn = imageLoad(pressure_field, yn).r;
+    float pzp = imageLoad(pressure_field, zp).r;
+    float pzn = imageLoad(pressure_field, zn).r;
+
+    // Calculate pressure gradient (central differences)
+    vec3 pressure_gradient = vec3(
+        (pxp - pxn) / (2.0 * push.cell_size),
+        (pyp - pyn) / (2.0 * push.cell_size),
+        (pzp - pzn) / (2.0 * push.cell_size)
+    );
+
+    // Project velocity: u_new = u - ∇p
+    vec3 divergence_free_velocity = velocity - pressure_gradient;
+
+    // Write output
+    imageStore(velocity_out, cell, vec4(divergence_free_velocity, 0.0));
+}

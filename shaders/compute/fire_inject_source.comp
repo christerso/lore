@@ -1,0 +1,73 @@
+#version 450
+
+/**
+ * Fire Source Injection Compute Shader
+ * =====================================
+ *
+ * Injects fuel, heat, and velocity at fire source points.
+ * Creates the initial conditions for combustion.
+ *
+ * Typically applied after advection but before force application.
+ */
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
+
+// Input/Output textures
+layout(binding = 0, rgba32f) uniform image3D velocity_field;
+layout(binding = 1, r32f) uniform image3D density_field;
+layout(binding = 2, r32f) uniform image3D temperature_field;
+
+// Push constants
+layout(push_constant) uniform PushConstants {
+    vec3 source_position;      // Source center (grid coordinates)
+    float source_radius;       // Source radius (grid cells)
+
+    vec3 source_velocity;      // Initial velocity (m/s)
+    float source_temperature;  // Fuel temperature (K)
+
+    float fuel_injection_rate; // Fuel kg/s → density increase
+    float delta_time;          // Time step (seconds)
+
+    ivec3 grid_resolution;     // Grid dimensions
+    float cell_size;           // Grid cell size (meters)
+} push;
+
+void main() {
+    ivec3 cell = ivec3(gl_GlobalInvocationID.xyz);
+
+    // Bounds check
+    if (any(greaterThanEqual(cell, push.grid_resolution))) {
+        return;
+    }
+
+    // Calculate distance from source center
+    vec3 cell_pos = vec3(cell) + vec3(0.5);
+    float distance = length(cell_pos - push.source_position);
+
+    // Only affect cells within source radius
+    if (distance > push.source_radius) {
+        return;
+    }
+
+    // Smooth falloff (Gaussian-like)
+    float falloff = exp(-distance * distance / (push.source_radius * push.source_radius));
+
+    // Read current values
+    vec3 velocity = imageLoad(velocity_field, cell).xyz;
+    float density = imageLoad(density_field, cell).r;
+    float temperature = imageLoad(temperature_field, cell).r;
+
+    // Inject velocity (blend with source velocity)
+    vec3 injected_velocity = mix(velocity, push.source_velocity, falloff * 0.8);
+
+    // Inject fuel density
+    float injected_density = density + push.fuel_injection_rate * falloff * push.delta_time;
+
+    // Inject heat
+    float injected_temperature = max(temperature, push.source_temperature * falloff);
+
+    // Write outputs
+    imageStore(velocity_field, cell, vec4(injected_velocity, 0.0));
+    imageStore(density_field, cell, vec4(injected_density));
+    imageStore(temperature_field, cell, vec4(injected_temperature));
+}
