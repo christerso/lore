@@ -4,6 +4,7 @@ add_library(lore_world STATIC
     tiled_importer.cpp
     tile_mesh_cache.cpp
     voronoi_fracture.cpp
+    debris_physics.cpp
 )
 
 # Link dependencies
