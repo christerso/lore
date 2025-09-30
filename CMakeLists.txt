@@ -233,14 +233,18 @@ target_disable_external_warnings(lore)
 function(compile_shader SHADER_SOURCE SHADER_OUTPUT)
     get_filename_component(SHADER_NAME ${SHADER_SOURCE} NAME)
 
-    # Use the glslangValidator built by CPM
-    set(GLSLANG_VALIDATOR ${CMAKE_BINARY_DIR}/_deps/glslang-build/StandAlone/$<CONFIG>/glslangValidator.exe)
+    # Use glslangValidator from VulkanSDK
+    find_program(GLSLANG_VALIDATOR glslangValidator HINTS "${Vulkan_GLSLANG_VALIDATOR_EXECUTABLE}" PATHS "${VULKAN_SDK}/Bin" ENV VULKAN_SDK)
+
+    if(NOT GLSLANG_VALIDATOR)
+        message(FATAL_ERROR "glslangValidator not found. Please install Vulkan SDK.")
+    endif()
 
     add_custom_command(
         OUTPUT ${SHADER_OUTPUT}
         COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/shaders/compiled
         COMMAND ${GLSLANG_VALIDATOR} -V ${SHADER_SOURCE} -o ${SHADER_OUTPUT}
-        DEPENDS ${SHADER_SOURCE} glslang
+        DEPENDS ${SHADER_SOURCE}
         COMMENT "Compiling ${SHADER_NAME} to SPIR-V"
         VERBATIM
     )
