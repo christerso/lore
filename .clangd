@@ -1,0 +1,41 @@
+CompileFlags:
+  Add:
+    - "-std=c++23"
+    - "-DVULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1"
+    - "-DWIN32"
+    - "-D_WINDOWS"
+    - "-I./include"
+    - "-I./src"
+  Remove:
+    - "-W*"
+    - "/W*"
+    - "-m*"
+    - "-f*march*"
+
+Index:
+  Background: Build
+  StandardLibrary: Yes
+
+InlayHints:
+  Enabled: Yes
+  ParameterNames: Yes
+  DeducedTypes: Yes
+
+Diagnostics:
+  ClangTidy:
+    Add:
+      - modernize-*
+      - performance-*
+      - readability-*
+    Remove:
+      - readability-magic-numbers
+      - modernize-use-trailing-return-type
+  UnusedIncludes: Strict
+  MissingIncludes: Strict
+
+Hover:
+  ShowAKA: Yes
+
+Completion:
+  AllScopes: Yes
+  IncludeIneligibleResults: Yes

@@ -1,0 +1,327 @@
+#version 450
+#extension GL_ARB_separate_shader_objects : enable
+
+/**
+ * @file voronoi_build_cells.comp
+ * @brief Second pass: Build Voronoi cell geometry from boundary vertices
+ *
+ * Takes boundary vertices from first pass and constructs cell faces using
+ * convex hull algorithm. Generates triangle indices for rendering/slicing.
+ *
+ * Algorithm:
+ * 1. For each cell, gather its boundary vertices
+ * 2. Compute convex hull (quick hull or gift wrapping)
+ * 3. Generate triangle indices from hull faces
+ * 4. Optimize vertex ordering for cache coherency
+ */
+
+layout(local_size_x = 256) in;
+
+// Input: Boundary vertices from first pass
+layout(std430, binding = 0) readonly buffer BoundaryVertexBuffer {
+    vec4 boundary_vertices[];  // xyz = position, w = cell index
+};
+
+// Input: Cell metadata from first pass
+layout(std430, binding = 1) readonly buffer InputCellMetadataBuffer {
+    uint input_cell_vertex_counts[];
+    uint input_cell_vertex_offsets[];
+    uint input_total_vertex_count;
+};
+
+// Input: Configuration
+layout(std140, binding = 2) uniform ConfigBuffer {
+    vec3 bounds_min;
+    uint seed_count;
+    vec3 bounds_max;
+    uint resolution;
+    float cell_padding;
+    uint generate_interior;
+    uint edge_sharpness_x1000;
+    uint unused_padding;
+};
+
+// Output: Final cell vertices (optimized, indexed)
+layout(std430, binding = 3) writeonly buffer OutputVertexBuffer {
+    vec4 output_vertices[];  // xyz = position, w = normal.x (pack normals separately)
+};
+
+// Output: Final cell normals
+layout(std430, binding = 4) writeonly buffer OutputNormalBuffer {
+    vec4 output_normals[];   // xyz = normal, w = unused
+};
+
+// Output: Triangle indices
+layout(std430, binding = 5) writeonly buffer OutputIndexBuffer {
+    uint output_indices[];
+};
+
+// Output: Final cell metadata
+layout(std430, binding = 6) writeonly buffer OutputCellMetadataBuffer {
+    uint output_cell_vertex_counts[];
+    uint output_cell_vertex_offsets[];
+    uint output_cell_index_counts[];
+    uint output_cell_index_offsets[];
+    uint output_total_vertices;
+    uint output_total_indices;
+};
+
+// Shared memory for convex hull computation
+shared vec3 hull_vertices[256];
+shared uint hull_vertex_count;
+shared uint hull_face_count;
+
+/**
+ * @brief Calculate face normal from 3 vertices
+ */
+vec3 calculate_face_normal(vec3 v0, vec3 v1, vec3 v2) {
+    vec3 edge1 = v1 - v0;
+    vec3 edge2 = v2 - v0;
+    return normalize(cross(edge1, edge2));
+}
+
+/**
+ * @brief Check if point is in front of plane
+ *
+ * @param point Point to test
+ * @param plane_point Point on plane
+ * @param plane_normal Plane normal
+ * @return Signed distance (positive = in front)
+ */
+float point_plane_distance(vec3 point, vec3 plane_point, vec3 plane_normal) {
+    return dot(point - plane_point, plane_normal);
+}
+
+/**
+ * @brief Build convex hull using gift wrapping algorithm
+ *
+ * Constructs convex hull from boundary vertices for a single cell.
+ * Simple but robust for small vertex counts (< 256).
+ *
+ * @param vertices Input vertices
+ * @param vertex_count Number of vertices
+ * @param output_faces Output triangle faces (indices into vertices)
+ * @return Number of triangular faces
+ */
+uint build_convex_hull_gift_wrap(
+    vec3 vertices[256],
+    uint vertex_count,
+    out uvec3 output_faces[512]  // Max 512 faces per cell
+) {
+    if (vertex_count < 4) {
+        return 0;  // Need at least 4 points for 3D hull
+    }
+
+    uint face_count = 0;
+
+    // Find starting point (leftmost point)
+    uint start_point = 0;
+    float min_x = vertices[0].x;
+    for (uint i = 1; i < vertex_count; ++i) {
+        if (vertices[i].x < min_x) {
+            min_x = vertices[i].x;
+            start_point = i;
+        }
+    }
+
+    // Find initial face (start_point + 2 other points)
+    uint p1 = start_point;
+    uint p2 = (start_point + 1) % vertex_count;
+    uint p3 = (start_point + 2) % vertex_count;
+
+    // Ensure initial face is CCW (counter-clockwise from outside)
+    vec3 normal = calculate_face_normal(vertices[p1], vertices[p2], vertices[p3]);
+    vec3 center = (vertices[p1] + vertices[p2] + vertices[p3]) / 3.0;
+
+    // Check if normal points outward (away from centroid of all points)
+    vec3 centroid = vec3(0.0);
+    for (uint i = 0; i < vertex_count; ++i) {
+        centroid += vertices[i];
+    }
+    centroid /= float(vertex_count);
+
+    if (dot(normal, center - centroid) < 0.0) {
+        // Flip winding
+        uint temp = p2;
+        p2 = p3;
+        p3 = temp;
+    }
+
+    output_faces[face_count++] = uvec3(p1, p2, p3);
+
+    // Gift wrapping algorithm
+    // For each edge, find the vertex that forms the most "outward" face
+    // Continue until all faces are found or max face count reached
+
+    uint edge_queue[1024];  // Edges to process (pair of vertex indices)
+    uint edge_queue_count = 0;
+
+    // Add initial edges to queue
+    edge_queue[edge_queue_count++] = p1;
+    edge_queue[edge_queue_count++] = p2;
+    edge_queue[edge_queue_count++] = p2;
+    edge_queue[edge_queue_count++] = p3;
+    edge_queue[edge_queue_count++] = p3;
+    edge_queue[edge_queue_count++] = p1;
+
+    bool processed_edges[1024];
+    for (uint i = 0; i < 1024; ++i) {
+        processed_edges[i] = false;
+    }
+
+    while (edge_queue_count >= 2 && face_count < 512) {
+        // Pop edge from queue
+        edge_queue_count -= 2;
+        uint edge_v1 = edge_queue[edge_queue_count];
+        uint edge_v2 = edge_queue[edge_queue_count + 1];
+
+        // Check if edge already processed
+        uint edge_hash = edge_v1 * 256 + edge_v2;
+        if (edge_hash < 1024 && processed_edges[edge_hash]) {
+            continue;
+        }
+        if (edge_hash < 1024) {
+            processed_edges[edge_hash] = true;
+        }
+
+        // Find vertex that forms most outward face with this edge
+        vec3 edge_dir = normalize(vertices[edge_v2] - vertices[edge_v1]);
+
+        uint best_vertex = 0;
+        float best_angle = -2.0;  // Cosine of angle (lower = more outward)
+
+        for (uint i = 0; i < vertex_count; ++i) {
+            if (i == edge_v1 || i == edge_v2) continue;
+
+            vec3 to_vertex = normalize(vertices[i] - vertices[edge_v1]);
+            float angle = dot(edge_dir, to_vertex);
+
+            // Check that this vertex is in front of existing faces
+            bool in_front = true;
+            for (uint f = 0; f < face_count; ++f) {
+                vec3 face_v0 = vertices[output_faces[f].x];
+                vec3 face_v1 = vertices[output_faces[f].y];
+                vec3 face_v2 = vertices[output_faces[f].z];
+                vec3 face_normal = calculate_face_normal(face_v0, face_v1, face_v2);
+
+                float dist = point_plane_distance(vertices[i], face_v0, face_normal);
+                if (dist < -0.001) {  // Small epsilon for numerical stability
+                    in_front = false;
+                    break;
+                }
+            }
+
+            if (in_front && angle < best_angle) {
+                best_angle = angle;
+                best_vertex = i;
+            }
+        }
+
+        // Add new face
+        if (best_vertex != 0 || vertex_count > 3) {
+            output_faces[face_count++] = uvec3(edge_v1, edge_v2, best_vertex);
+
+            // Add new edges to queue
+            if (edge_queue_count < 1020) {
+                edge_queue[edge_queue_count++] = edge_v2;
+                edge_queue[edge_queue_count++] = best_vertex;
+                edge_queue[edge_queue_count++] = best_vertex;
+                edge_queue[edge_queue_count++] = edge_v1;
+            }
+        }
+    }
+
+    return face_count;
+}
+
+/**
+ * @brief Main compute shader - Build cell geometry
+ *
+ * Each thread processes one Voronoi cell.
+ * Builds convex hull from boundary vertices and generates indexed triangle mesh.
+ */
+void main() {
+    uint cell_index = gl_GlobalInvocationID.x;
+
+    if (cell_index >= seed_count) {
+        return;
+    }
+
+    // Get boundary vertices for this cell
+    uint vertex_count = input_cell_vertex_counts[cell_index];
+    uint vertex_offset = input_cell_vertex_offsets[cell_index];
+
+    if (vertex_count < 4 || vertex_count > 256) {
+        // Not enough vertices for hull or too many for shared memory
+        output_cell_vertex_counts[cell_index] = 0;
+        output_cell_index_counts[cell_index] = 0;
+        return;
+    }
+
+    // Load vertices into shared memory
+    if (gl_LocalInvocationID.x == 0) {
+        hull_vertex_count = 0;
+        hull_face_count = 0;
+    }
+    barrier();
+
+    // Each thread loads vertices (cooperatively)
+    for (uint i = gl_LocalInvocationID.x; i < vertex_count; i += gl_WorkGroupSize.x) {
+        uint src_index = vertex_offset + i;
+        if (src_index < input_total_vertex_count &&
+            uint(boundary_vertices[src_index].w) == cell_index) {
+            uint dst_index = atomicAdd(hull_vertex_count, 1);
+            if (dst_index < 256) {
+                hull_vertices[dst_index] = boundary_vertices[src_index].xyz;
+            }
+        }
+    }
+
+    barrier();
+
+    // Single thread builds convex hull
+    if (gl_LocalInvocationID.x == 0) {
+        uvec3 hull_faces[512];
+        uint face_count = build_convex_hull_gift_wrap(
+            hull_vertices,
+            hull_vertex_count,
+            hull_faces
+        );
+
+        // Allocate output space atomically
+        uint output_vert_offset = atomicAdd(output_total_vertices, hull_vertex_count);
+        uint output_index_offset = atomicAdd(output_total_indices, face_count * 3);
+
+        // Write metadata
+        output_cell_vertex_counts[cell_index] = hull_vertex_count;
+        output_cell_vertex_offsets[cell_index] = output_vert_offset;
+        output_cell_index_counts[cell_index] = face_count * 3;
+        output_cell_index_offsets[cell_index] = output_index_offset;
+
+        // Write vertices
+        for (uint i = 0; i < hull_vertex_count; ++i) {
+            output_vertices[output_vert_offset + i] = vec4(hull_vertices[i], 0.0);
+        }
+
+        // Write indices and calculate normals
+        for (uint i = 0; i < face_count; ++i) {
+            uvec3 face = hull_faces[i];
+
+            // Write indices
+            output_indices[output_index_offset + i * 3 + 0] = output_vert_offset + face.x;
+            output_indices[output_index_offset + i * 3 + 1] = output_vert_offset + face.y;
+            output_indices[output_index_offset + i * 3 + 2] = output_vert_offset + face.z;
+
+            // Calculate and write normals
+            vec3 normal = calculate_face_normal(
+                hull_vertices[face.x],
+                hull_vertices[face.y],
+                hull_vertices[face.z]
+            );
+
+            output_normals[output_vert_offset + face.x] = vec4(normal, 0.0);
+            output_normals[output_vert_offset + face.y] = vec4(normal, 0.0);
+            output_normals[output_vert_offset + face.z] = vec4(normal, 0.0);
+        }
+    }
+}

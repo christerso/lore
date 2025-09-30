@@ -1,0 +1,14 @@
+{
+    "version": 1,
+    "revision": 0,
+    "rules": [
+        {
+            "primary-output": "lore_math.dir\\Debug\\math.obj",
+            "outputs": [
+                "G:\\repos\\lore\\src\\math\\Debug\\lore_math.pdb",
+                "lore_math.dir\\Debug\\"
+            ],
+            "requires": []
+        }
+    ]
+}

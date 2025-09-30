@@ -1,0 +1,220 @@
+# Lore Engine - C++/Vulkan Project .gitattributes
+
+# Default line ending normalization
+* text=auto eol=lf
+
+# Source Code Files
+*.cpp text diff=cpp
+*.hpp text diff=cpp
+*.h text diff=cpp
+*.hxx text diff=cpp
+*.cxx text diff=cpp
+*.cc text diff=cpp
+*.c text diff=c
+
+# CMake Files
+*.cmake text diff=cmake
+CMakeLists.txt text diff=cmake
+
+# Configuration Files
+*.json text diff=json
+*.toml text diff=toml
+*.yaml text diff=yaml
+*.yml text diff=yaml
+*.ini text diff=ini
+*.cfg text diff=ini
+*.conf text diff=ini
+
+# Shader Files (GLSL/HLSL)
+*.vert text diff=glsl
+*.frag text diff=glsl
+*.geom text diff=glsl
+*.tesc text diff=glsl
+*.tese text diff=glsl
+*.comp text diff=glsl
+*.mesh text diff=glsl
+*.task text diff=glsl
+*.rgen text diff=glsl
+*.rint text diff=glsl
+*.rahit text diff=glsl
+*.rcall text diff=glsl
+*.rmiss text diff=glsl
+*.glsl text diff=glsl
+*.hlsl text diff=hlsl
+
+# Documentation
+*.md text diff=markdown
+*.markdown text diff=markdown
+*.rst text diff=rst
+*.txt text
+*.html text diff=html
+*.css text diff=css
+*.scss text diff=scss
+*.js text diff=javascript
+
+# Build Scripts
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+*.sh text eol=lf executable
+*.py text diff=python executable
+
+# Makefiles
+Makefile text eol=lf
+*.mk text eol=lf
+makefile text eol=lf
+
+# Git Configuration
+.gitattributes text
+.gitignore text
+.gitmodules text
+
+# Assets (keep binary files as-is)
+# Images
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.tga binary
+*.dds binary
+*.ktx binary
+*.bmp binary
+*.tiff binary
+*.webp binary
+
+# Audio
+*.mp3 binary
+*.wav binary
+*.ogg binary
+*.flac binary
+*.m4a binary
+*.wma binary
+
+# 3D Models
+*.obj binary
+*.fbx binary
+*.gltf binary
+*.glb binary
+*.blend binary
+*.max binary
+*.ma binary
+
+# Compiled Shaders
+*.spv binary
+
+# Fonts
+*.ttf binary
+*.otf binary
+*.woff binary
+*.woff2 binary
+
+# Archives
+*.zip binary
+*.tar binary
+*.tar.gz binary
+*.tar.bz2 binary
+*.rar binary
+*.7z binary
+
+# Compiled Binaries
+*.exe binary
+*.dll binary
+*.so binary
+*.dylib binary
+*.a binary
+*.lib binary
+*.pdb binary
+*.ilk binary
+*.exp binary
+*.map binary
+
+# Vulkan/Platform Specific
+*.manifest text
+*.rc text diff=rc
+
+# Performance & Profiling
+*.prof binary
+*.pgcda binary
+*.pgd binary
+*.gcda binary
+*.gcno binary
+
+# Database Files
+*.db binary
+*.sqlite binary
+*.sqlite3 binary
+
+# Save Files & Runtime Data
+*.save binary
+*.sav binary
+*.dat binary
+
+# Large files that shouldn't be diffed
+*.pdf diff=astextplain
+*.docx diff=astextplain
+*.xlsx diff=astextplain
+
+# Special handling for C++ files
+*.cpp linguist-language=C++
+*.hpp linguist-language=C++
+*.h linguist-language=C++
+*.cxx linguist-language=C++
+
+# CMake files should be recognized as CMake
+*.cmake linguist-language=CMake
+CMakeLists.txt linguist-language=CMake
+
+# Shader files should be recognized as GLSL/HLSL
+*.vert linguist-language=GLSL
+*.frag linguist-language=GLSL
+*.geom linguist-language=GLSL
+*.comp linguist-language=GLSL
+*.glsl linguist-language=GLSL
+*.hlsl linguist-language=HLSL
+
+# Documentation files
+*.md linguist-language=Markdown
+*.markdown linguist-language=Markdown
+
+# Configuration files
+*.json linguist-language=JSON
+*.yaml linguist-language=YAML
+*.yml linguist-language=YAML
+*.toml linguist-language=TOML
+*.ini linguist-language=INI
+
+# Scripts
+*.py linguist-language=Python
+*.sh linguist-language=Shell
+*.bat linguist-language=Batch
+*.ps1 linguist-language=PowerShell
+
+# Detect export control violations
+*.cpp export-control
+*.hpp export-control
+*.h export-control
+
+# Security scanning
+*.cpp security-scan
+*.hpp security-scan
+*.h security-scan
+
+# Large file handling
+*.png filter=lfs diff=lfs merge=lfs -text
+*.jpg filter=lfs diff=lfs merge=lfs -text
+*.jpeg filter=lfs diff=lfs merge=lfs -text
+*.wav filter=lfs diff=lfs merge=lfs -text
+*.mp3 filter=lfs diff=lfs merge=lfs -text
+*.fbx filter=lfs diff=lfs merge=lfs -text
+*.obj filter=lfs diff=lfs merge=lfs -text
+*.gltf filter=lfs diff=lfs merge=lfs -text
+*.glb filter=lfs diff=lfs merge=lfs -text
+
+# Line ending overrides for specific tools
+# VS Code settings
+.vscode/* text eol=lf
+
+# Sublime Text settings
+sublime-* text eol=lf
+
+# Ensure consistent line endings for all text files
+# Force LF for cross-platform compatibility
+# Windows batch files still use CRLF as specified above

@@ -1,0 +1,141 @@
+#version 450
+
+// GPU ECS Transform System Compute Shader
+// Processes transform components entirely on GPU
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+struct TransformComponent {
+    mat4 model_matrix;
+    vec3 position;
+    float scale;
+    vec4 rotation;          // quaternion
+    uint dirty_flag;
+    uint padding[3];
+};
+
+struct VelocityComponent {
+    vec3 linear;
+    float angular_speed;
+    vec3 angular_axis;
+    uint padding;
+};
+
+layout(set = 0, binding = 0, std430) restrict buffer TransformBuffer {
+    TransformComponent transforms[];
+};
+
+layout(set = 0, binding = 1, std430) restrict buffer VelocityBuffer {
+    VelocityComponent velocities[];
+};
+
+layout(set = 0, binding = 2, std430) restrict buffer EntityIndexBuffer {
+    uint entity_indices[];
+};
+
+layout(push_constant) uniform PushConstants {
+    float delta_time;
+    uint num_entities;
+    uint update_matrices;
+    uint padding;
+} push_constants;
+
+// Quaternion operations
+vec4 quat_multiply(vec4 q1, vec4 q2) {
+    return vec4(
+        q1.w * q2.xyz + q2.w * q1.xyz + cross(q1.xyz, q2.xyz),
+        q1.w * q2.w - dot(q1.xyz, q2.xyz)
+    );
+}
+
+vec4 quat_from_axis_angle(vec3 axis, float angle) {
+    float half_angle = angle * 0.5;
+    return vec4(axis * sin(half_angle), cos(half_angle));
+}
+
+vec4 quat_normalize(vec4 q) {
+    float len = length(q);
+    return len > 1e-6 ? q / len : vec4(0, 0, 0, 1);
+}
+
+mat4 quat_to_matrix(vec4 q) {
+    float xx = q.x * q.x;
+    float yy = q.y * q.y;
+    float zz = q.z * q.z;
+    float xy = q.x * q.y;
+    float xz = q.x * q.z;
+    float yz = q.y * q.z;
+    float wx = q.w * q.x;
+    float wy = q.w * q.y;
+    float wz = q.w * q.z;
+
+    return mat4(
+        1.0 - 2.0 * (yy + zz), 2.0 * (xy + wz), 2.0 * (xz - wy), 0.0,
+        2.0 * (xy - wz), 1.0 - 2.0 * (xx + zz), 2.0 * (yz + wx), 0.0,
+        2.0 * (xz + wy), 2.0 * (yz - wx), 1.0 - 2.0 * (xx + yy), 0.0,
+        0.0, 0.0, 0.0, 1.0
+    );
+}
+
+void main() {
+    uint entity_idx = gl_GlobalInvocationID.x;
+
+    if (entity_idx >= push_constants.num_entities || entity_idx >= entity_indices.length()) {
+        return;
+    }
+
+    uint actual_entity_id = entity_indices[entity_idx];
+
+    if (actual_entity_id >= transforms.length()) {
+        return;
+    }
+
+    TransformComponent transform = transforms[actual_entity_id];
+    bool has_velocity = actual_entity_id < velocities.length();
+
+    if (has_velocity) {
+        VelocityComponent velocity = velocities[actual_entity_id];
+        float dt = push_constants.delta_time;
+
+        // Update position from linear velocity
+        transform.position += velocity.linear * dt;
+
+        // Update rotation from angular velocity
+        if (length(velocity.angular_axis) > 1e-6) {
+            float angular_speed = velocity.angular_speed * dt;
+            vec4 rotation_delta = quat_from_axis_angle(normalize(velocity.angular_axis), angular_speed);
+            transform.rotation = quat_normalize(quat_multiply(transform.rotation, rotation_delta));
+        }
+
+        // Mark as dirty for matrix update
+        transform.dirty_flag = 1;
+    }
+
+    // Update model matrix if dirty or forced update
+    if (transform.dirty_flag != 0 || push_constants.update_matrices != 0) {
+        // Create transformation matrix
+        mat4 translation_matrix = mat4(
+            1.0, 0.0, 0.0, 0.0,
+            0.0, 1.0, 0.0, 0.0,
+            0.0, 0.0, 1.0, 0.0,
+            transform.position.x, transform.position.y, transform.position.z, 1.0
+        );
+
+        mat4 rotation_matrix = quat_to_matrix(transform.rotation);
+
+        mat4 scale_matrix = mat4(
+            transform.scale, 0.0, 0.0, 0.0,
+            0.0, transform.scale, 0.0, 0.0,
+            0.0, 0.0, transform.scale, 0.0,
+            0.0, 0.0, 0.0, 1.0
+        );
+
+        // Combine transformations: T * R * S
+        transform.model_matrix = translation_matrix * rotation_matrix * scale_matrix;
+
+        // Clear dirty flag
+        transform.dirty_flag = 0;
+    }
+
+    // Write back updated transform
+    transforms[actual_entity_id] = transform;
+}

@@ -1,0 +1,85 @@
+# Lore Engine CMake Configuration File
+# This file provides CMake configuration for the Lore Engine
+
+@PACKAGE_INIT@
+
+# Check if required components are available
+include(CMakeFindDependencyMacro)
+
+# Core dependencies
+find_dependency(glm REQUIRED)
+
+# Optional dependencies based on configuration
+if(@LORE_USE_VULKAN@)
+    find_dependency(Vulkan REQUIRED)
+endif()
+
+if(@LORE_USE_OPENGL@)
+    find_dependency(OpenGL REQUIRED)
+endif()
+
+if(@LORE_USE_BULLET_PHYSICS@)
+    find_dependency(Bullet)
+endif()
+
+if(@LORE_USE_FFTW@)
+    find_dependency(PkgConfig REQUIRED)
+    pkg_check_modules(FFTW3 REQUIRED fftw3f)
+endif()
+
+if(@LORE_USE_OPENAL@)
+    find_dependency(OpenAL)
+endif()
+
+if(@LORE_USE_INTEL_MKL@)
+    find_dependency(MKL)
+endif()
+
+if(@LORE_USE_TBB@)
+    find_dependency(TBB)
+endif()
+
+# Include the targets file
+include("${CMAKE_CURRENT_LIST_DIR}/lore-targets.cmake")
+
+# Define component targets
+set(lore_ECS_FOUND TRUE)
+set(lore_Math_FOUND TRUE)
+set(lore_Physics_FOUND TRUE)
+set(lore_Audio_FOUND TRUE)
+set(lore_Graphics_FOUND TRUE)
+
+# Check for requested components
+foreach(component ${lore_FIND_COMPONENTS})
+    if(NOT lore_${component}_FOUND)
+        if(lore_FIND_REQUIRED_${component})
+            message(FATAL_ERROR "Lore Engine component ${component} not found")
+        else()
+            message(WARNING "Lore Engine component ${component} not found")
+            set(lore_${component}_FOUND FALSE)
+        endif()
+    endif()
+endforeach()
+
+# Provide information about the build configuration
+message(STATUS "Found Lore Engine version @PROJECT_VERSION@")
+
+if(@LORE_ENGINE_SIMD_ENABLED@)
+    message(STATUS "  SIMD optimizations: ENABLED")
+else()
+    message(STATUS "  SIMD optimizations: DISABLED")
+endif()
+
+if(@LORE_ENGINE_PROFILING_ENABLED@)
+    message(STATUS "  Performance profiling: ENABLED")
+else()
+    message(STATUS "  Performance profiling: DISABLED")
+endif()
+
+# Set variables for compatibility
+set(LORE_INCLUDE_DIRS "@PACKAGE_CMAKE_INSTALL_INCLUDEDIR@")
+set(LORE_LIBRARIES lore::engine)
+set(LORE_VERSION "@PROJECT_VERSION@")
+
+# Mark as found
+set(lore_FOUND TRUE)

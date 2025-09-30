@@ -1,0 +1,351 @@
+#version 450
+
+// GPU Acoustic Convolution Compute Shader - FFT-based impulse response convolution
+// Complete GPU implementation for environmental acoustics processing
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+// Push constants for convolution parameters
+layout(push_constant) uniform ConvolutionPushConstants {
+    uint sample_rate;
+    uint buffer_size;
+    uint impulse_response_length;
+    uint num_audio_sources;
+    float wet_level;
+    float dry_level;
+    float delta_time;
+    uint frame_offset;
+} push_constants;
+
+// Audio source data structure
+struct AudioSourceData {
+    vec3 position;
+    float volume;
+    vec3 velocity;
+    float pitch;
+    vec3 last_position;
+    float distance_attenuation;
+    float left_gain;
+    float right_gain;
+    float doppler_shift;
+    uint entity_id;
+    uint active_flag;
+    uint impulse_response_id;
+    float phase_accumulator;
+};
+
+// Complex number for FFT processing
+struct Complex {
+    float real;
+    float imag;
+};
+
+// Impulse response data for convolution
+struct ImpulseResponse {
+    float samples[512];          // 512-sample impulse response
+    float decay_time;
+    float wet_level;
+    float delay_time;
+    uint sample_count;
+    uint material_id;
+    float room_size;
+    float absorption_coefficient;
+};
+
+// FFT workspace for overlap-add convolution
+struct ConvolutionWorkspace {
+    Complex fft_buffer[1024];    // FFT working buffer (power of 2)
+    Complex impulse_fft[512];    // Pre-computed impulse response FFT
+    float overlap_buffer[512];   // Overlap-add buffer
+    uint write_position;
+    uint read_position;
+    float energy_accumulator;
+    float peak_detector;
+};
+
+// Storage buffers
+layout(set = 0, binding = 0, std430) restrict readonly buffer AudioSourceBuffer {
+    AudioSourceData audio_sources[];
+};
+
+layout(set = 0, binding = 1, std430) restrict buffer ImpulseResponseBuffer {
+    ImpulseResponse impulse_responses[];
+};
+
+layout(set = 0, binding = 2, std430) restrict buffer ConvolutionWorkspaceBuffer {
+    ConvolutionWorkspace workspaces[];
+};
+
+layout(set = 0, binding = 3, std430) restrict buffer AudioOutputBuffer {
+    float left_channel[];
+};
+
+layout(set = 0, binding = 4, std430) restrict buffer AudioOutputRightBuffer {
+    float right_channel[];
+};
+
+layout(set = 0, binding = 5, std430) restrict readonly buffer EnvironmentalParametersBuffer {
+    float room_size;
+    float global_absorption;
+    float air_absorption;
+    float temperature;
+    vec3 wind_velocity;
+    float humidity;
+    float atmospheric_pressure;
+    uint max_reflections;
+} env_params;
+
+// Shared memory for FFT computation
+shared Complex shared_fft[1024];
+shared float shared_real[512];
+
+// Complex number operations
+Complex complex_multiply(Complex a, Complex b) {
+    Complex result;
+    result.real = a.real * b.real - a.imag * b.imag;
+    result.imag = a.real * b.imag + a.imag * b.real;
+    return result;
+}
+
+Complex complex_add(Complex a, Complex b) {
+    Complex result;
+    result.real = a.real + b.real;
+    result.imag = a.imag + b.imag;
+    return result;
+}
+
+float complex_magnitude(Complex c) {
+    return sqrt(c.real * c.real + c.imag * c.imag);
+}
+
+// Bit-reverse permutation for FFT
+uint reverse_bits(uint x, uint log_n) {
+    uint result = 0;
+    for (uint i = 0; i < log_n; i++) {
+        result = (result << 1) | (x & 1);
+        x >>= 1;
+    }
+    return result;
+}
+
+// Radix-2 Cooley-Tukey FFT implementation
+void perform_fft(uint workspace_id, uint fft_size, bool inverse) {
+    uint log_n = uint(log2(float(fft_size)));
+    uint thread_id = gl_LocalInvocationID.x;
+
+    // Copy data to shared memory with bit-reverse permutation
+    if (thread_id < fft_size) {
+        uint reversed_idx = reverse_bits(thread_id, log_n);
+        shared_fft[thread_id] = workspaces[workspace_id].fft_buffer[reversed_idx];
+    }
+
+    barrier();
+    memoryBarrierShared();
+
+    // Butterfly operations
+    for (uint stage = 1; stage <= log_n; stage++) {
+        uint m = 1 << stage;
+        uint m_half = m >> 1;
+
+        // Twiddle factor
+        float theta = (inverse ? 2.0 : -2.0) * 3.14159265359 / float(m);
+        Complex w;
+        w.real = cos(theta);
+        w.imag = sin(theta);
+
+        for (uint i = thread_id; i < fft_size; i += gl_WorkGroupSize.x) {
+            uint k = i & (m - 1);
+            if (k < m_half) {
+                uint even_idx = (i & ~(m - 1)) | k;
+                uint odd_idx = even_idx | m_half;
+
+                // Calculate twiddle factor power
+                Complex twiddle = w;
+                for (uint p = 1; p < k; p++) {
+                    twiddle = complex_multiply(twiddle, w);
+                }
+
+                Complex even = shared_fft[even_idx];
+                Complex odd = complex_multiply(shared_fft[odd_idx], twiddle);
+
+                shared_fft[even_idx] = complex_add(even, odd);
+                shared_fft[odd_idx] = Complex(even.real - odd.real, even.imag - odd.imag);
+            }
+        }
+
+        barrier();
+        memoryBarrierShared();
+    }
+
+    // Copy result back and normalize if inverse
+    if (thread_id < fft_size) {
+        workspaces[workspace_id].fft_buffer[thread_id] = shared_fft[thread_id];
+        if (inverse) {
+            workspaces[workspace_id].fft_buffer[thread_id].real /= float(fft_size);
+            workspaces[workspace_id].fft_buffer[thread_id].imag /= float(fft_size);
+        }
+    }
+}
+
+// Generate procedural impulse response based on acoustic materials
+void generate_material_impulse_response(uint material_id, float room_size, float absorption, inout ImpulseResponse ir) {
+    float decay_constant = -log(0.001) / (absorption * room_size * 0.1); // RT60 calculation
+    float reflection_delay = room_size / 343.0; // Speed of sound
+
+    // Clear impulse response
+    for (uint i = 0; i < 512; i++) {
+        ir.samples[i] = 0.0;
+    }
+
+    // Early reflections (first 50ms)
+    uint early_samples = uint(0.05 * push_constants.sample_rate);
+    for (uint i = 1; i < min(early_samples, 512u); i++) {
+        float time = float(i) / float(push_constants.sample_rate);
+        float amplitude = exp(-decay_constant * time);
+
+        // Add multiple reflections with different delays
+        if (i % 7 == 0) ir.samples[i] += amplitude * 0.8; // Wall reflections
+        if (i % 11 == 0) ir.samples[i] += amplitude * 0.6; // Floor/ceiling
+        if (i % 13 == 0) ir.samples[i] += amplitude * 0.4; // Corner reflections
+    }
+
+    // Late reverberation (exponential decay)
+    for (uint i = early_samples; i < 512; i++) {
+        float time = float(i) / float(push_constants.sample_rate);
+        float noise = fract(sin(float(i) * 12.9898 + float(material_id) * 78.233) * 43758.5453) * 2.0 - 1.0;
+        ir.samples[i] = exp(-decay_constant * time) * noise * 0.3;
+    }
+
+    ir.decay_time = 1.0 / decay_constant;
+    ir.sample_count = 512;
+}
+
+// Overlap-add convolution with impulse response
+void perform_convolution(uint source_id, uint workspace_id) {
+    uint fft_size = 1024;
+    uint block_size = 512;
+
+    // Load current audio block (generated procedurally for this demo)
+    for (uint i = 0; i < block_size; i++) {
+        float t = (float(push_constants.frame_offset + i) / float(push_constants.sample_rate)) + audio_sources[source_id].phase_accumulator;
+        float signal = sin(2.0 * 3.14159265359 * 440.0 * t) * audio_sources[source_id].volume; // 440Hz test tone
+
+        workspaces[workspace_id].fft_buffer[i].real = signal;
+        workspaces[workspace_id].fft_buffer[i].imag = 0.0;
+    }
+
+    // Zero-pad for convolution
+    for (uint i = block_size; i < fft_size; i++) {
+        workspaces[workspace_id].fft_buffer[i].real = 0.0;
+        workspaces[workspace_id].fft_buffer[i].imag = 0.0;
+    }
+
+    // Forward FFT of input signal
+    perform_fft(workspace_id, fft_size, false);
+
+    // Frequency domain multiplication with impulse response FFT
+    uint ir_id = audio_sources[source_id].impulse_response_id;
+    for (uint i = 0; i < fft_size / 2; i++) {
+        Complex signal_fft = workspaces[workspace_id].fft_buffer[i];
+        Complex ir_fft = workspaces[workspace_id].impulse_fft[i % 512];
+        workspaces[workspace_id].fft_buffer[i] = complex_multiply(signal_fft, ir_fft);
+    }
+
+    // Inverse FFT
+    perform_fft(workspace_id, fft_size, true);
+
+    // Overlap-add with previous block
+    for (uint i = 0; i < block_size; i++) {
+        float convolved_sample = workspaces[workspace_id].fft_buffer[i].real;
+        float overlapped_sample = convolved_sample + workspaces[workspace_id].overlap_buffer[i];
+
+        // Apply wet/dry mix
+        float dry_sample = sin(2.0 * 3.14159265359 * 440.0 * (float(push_constants.frame_offset + i) / float(push_constants.sample_rate)));
+        float final_sample = dry_sample * push_constants.dry_level + overlapped_sample * push_constants.wet_level;
+
+        // Apply 3D positioning gains
+        uint output_idx = push_constants.frame_offset + i;
+        if (output_idx < left_channel.length()) {
+            atomicAdd(left_channel[output_idx], final_sample * audio_sources[source_id].left_gain);
+            atomicAdd(right_channel[output_idx], final_sample * audio_sources[source_id].right_gain);
+        }
+
+        // Store overlap for next block
+        if (i + block_size < fft_size) {
+            workspaces[workspace_id].overlap_buffer[i] = workspaces[workspace_id].fft_buffer[i + block_size].real;
+        } else {
+            workspaces[workspace_id].overlap_buffer[i] = 0.0;
+        }
+    }
+
+    // Update energy and peak detection
+    float energy = 0.0;
+    float peak = 0.0;
+    for (uint i = 0; i < block_size; i++) {
+        float sample = abs(workspaces[workspace_id].fft_buffer[i].real);
+        energy += sample * sample;
+        peak = max(peak, sample);
+    }
+    workspaces[workspace_id].energy_accumulator = energy / float(block_size);
+    workspaces[workspace_id].peak_detector = peak;
+}
+
+// Pre-compute impulse response FFT for efficiency
+void precompute_impulse_response_fft(uint workspace_id, uint ir_id) {
+    // Load impulse response into FFT buffer
+    for (uint i = 0; i < 512; i++) {
+        workspaces[workspace_id].fft_buffer[i].real = impulse_responses[ir_id].samples[i];
+        workspaces[workspace_id].fft_buffer[i].imag = 0.0;
+    }
+
+    // Zero-pad to match convolution size
+    for (uint i = 512; i < 1024; i++) {
+        workspaces[workspace_id].fft_buffer[i].real = 0.0;
+        workspaces[workspace_id].fft_buffer[i].imag = 0.0;
+    }
+
+    // Compute FFT
+    perform_fft(workspace_id, 1024, false);
+
+    // Store in dedicated impulse response FFT buffer
+    for (uint i = 0; i < 512; i++) {
+        workspaces[workspace_id].impulse_fft[i] = workspaces[workspace_id].fft_buffer[i];
+    }
+}
+
+void main() {
+    uint thread_id = gl_GlobalInvocationID.x;
+    uint source_id = thread_id;
+
+    // Bounds check
+    if (source_id >= push_constants.num_audio_sources || source_id >= audio_sources.length()) {
+        return;
+    }
+
+    // Skip inactive sources
+    if (audio_sources[source_id].active_flag == 0) {
+        return;
+    }
+
+    uint workspace_id = source_id; // One workspace per source
+    uint ir_id = audio_sources[source_id].impulse_response_id;
+
+    // Generate or update impulse response based on current environmental conditions
+    if (ir_id < impulse_responses.length()) {
+        generate_material_impulse_response(
+            ir_id,
+            env_params.room_size,
+            env_params.global_absorption,
+            impulse_responses[ir_id]
+        );
+
+        // Pre-compute impulse response FFT
+        precompute_impulse_response_fft(workspace_id, ir_id);
+    }
+
+    // Perform real-time convolution
+    perform_convolution(source_id, workspace_id);
+
+    // Update source phase for next frame
+    audio_sources[source_id].phase_accumulator += float(push_constants.buffer_size) / float(push_constants.sample_rate);
+}

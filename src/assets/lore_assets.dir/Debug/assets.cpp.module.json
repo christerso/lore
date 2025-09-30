@@ -1,0 +1,14 @@
+{
+    "version": 1,
+    "revision": 0,
+    "rules": [
+        {
+            "primary-output": "lore_assets.dir\\Debug\\assets.obj",
+            "outputs": [
+                "G:\\repos\\lore\\lib\\Debug\\lore_assets.pdb",
+                "lore_assets.dir\\Debug\\"
+            ],
+            "requires": []
+        }
+    ]
+}

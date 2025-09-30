@@ -1,0 +1,41 @@
+{
+  "mcpServers": {
+    "obsidian": {
+      "command": "python",
+      "args": ["-m", "mcp_obsidian"],
+      "env": {
+        "OBSIDIAN_API_KEY": "1c8e4c45baa6d96fffcac88c1fc92a30554d2336af4009603281f12ff4ee04b3",
+        "OBSIDIAN_HOST": "localhost",
+        "OBSIDIAN_PORT": "27123"
+      }
+    },
+    "obsidian-advanced": {
+      "command": "python",
+      "args": ["G:/repos/lore/scripts/advanced_obsidian_mcp.py"],
+      "env": {
+        "OBSIDIAN_API_KEY": "1c8e4c45baa6d96fffcac88c1fc92a30554d2336af4009603281f12ff4ee04b3",
+        "OBSIDIAN_HOST": "localhost",
+        "OBSIDIAN_PORT": "27123",
+        "OBSIDIAN_DEBUG": "false",
+        "OBSIDIAN_CACHE_SIZE": "1000",
+        "OBSIDIAN_TIMEOUT": "30"
+      }
+    }
+  },
+  "allowedTools": [
+    "Edit",
+    "Read",
+    "Write",
+    "Glob",
+    "Grep",
+    "Bash",
+    "BashOutput",
+    "WebSearch",
+    "WebFetch",
+    "Task",
+    "TodoWrite",
+    "SlashCommand",
+    "mcp__obsidian__*",
+    "mcp__obsidian-advanced__*"
+  ]
+}

@@ -1,0 +1,14 @@
+{
+    "version": 1,
+    "revision": 0,
+    "rules": [
+        {
+            "primary-output": "lore.dir\\Debug\\main.obj",
+            "outputs": [
+                "G:\\repos\\lore\\lore.dir\\Debug\\vc143.pdb",
+                "lore.dir\\Debug\\"
+            ],
+            "requires": []
+        }
+    ]
+}

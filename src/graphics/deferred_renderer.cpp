@@ -2001,3 +2001,46 @@ void DeferredRenderer::set_shadow_config(const ShadowConfig& config) {
 }
 
 } // namespace lore::graphics
+// ═══════════════════════════════════════════════════════════════════════════════
+// Post-Processing Integration
+// ═══════════════════════════════════════════════════════════════════════════════
+
+#include <lore/graphics/post_process_pipeline.hpp>
+
+void DeferredRenderer::create_hdr_buffer(VkExtent2D extent) {
+    // Create HDR buffer for post-processing (RGBA16F format)
+    hdr_buffer_ = create_attachment(
+        extent,
+        VK_FORMAT_R16G16B16A16_SFLOAT,
+        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT,
+        VK_IMAGE_ASPECT_COLOR_BIT
+    );
+    LOG_INFO(Graphics, "Created HDR buffer for post-processing ({}x{})", extent.width, extent.height);
+}
+
+void DeferredRenderer::destroy_hdr_buffer() {
+    destroy_attachment(hdr_buffer_);
+}
+
+void DeferredRenderer::set_post_process_config(const PostProcessConfig& config) {
+    if (post_process_pipeline_) {
+        post_process_pipeline_->set_config(config);
+    }
+}
+
+const PostProcessConfig& DeferredRenderer::get_post_process_config() const {
+    if (post_process_pipeline_) {
+        return post_process_pipeline_->get_config();
+    }
+    static PostProcessConfig default_config;
+    return default_config;
+}
+
+PostProcessConfig& DeferredRenderer::get_post_process_config_mut() {
+    if (!post_process_pipeline_) {
+        throw std::runtime_error("Post-processing pipeline not initialized");
+    }
+    // Return mutable reference through const_cast (safe because we own the pipeline)
+    return const_cast<PostProcessConfig&>(post_process_pipeline_->get_config());
+}
+

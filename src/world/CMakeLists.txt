@@ -1,0 +1,18 @@
+# World System Library
+add_library(lore_world STATIC
+    tilemap_world_system.cpp
+    tiled_importer.cpp
+)
+
+# Link dependencies
+target_link_libraries(lore_world PUBLIC
+    lore_core           # For logging
+    lore_math           # For Vec3 and math types
+    lore_vision         # For vision integration adapter
+    nlohmann_json::nlohmann_json  # For JSON parsing
+)
+
+# Include directories
+target_include_directories(lore_world PUBLIC
+    ${CMAKE_SOURCE_DIR}/include
+)

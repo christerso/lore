@@ -1,0 +1,14 @@
+{
+    "version": 1,
+    "revision": 0,
+    "rules": [
+        {
+            "primary-output": "lore_input.dir\\Debug\\glfw_input_handler.obj",
+            "outputs": [
+                "G:\\repos\\lore\\src\\input\\Debug\\lore_input.pdb",
+                "lore_input.dir\\Debug\\"
+            ],
+            "requires": []
+        }
+    ]
+}

@@ -1,0 +1,7 @@
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -1,2 +1,2 @@
+-cmake_minimum_required(VERSION 3.6 FATAL_ERROR)
+-cmake_policy(VERSION 3.6)
++cmake_minimum_required(VERSION 3.10...3.28 FATAL_ERROR)
++cmake_policy(VERSION 3.10)

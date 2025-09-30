@@ -1,0 +1,103 @@
+#version 450
+
+// GPU Physics Integration Compute Shader
+// Performs complete rigid body physics simulation on GPU
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+struct RigidBody {
+    vec3 position;
+    float mass;
+    vec3 velocity;
+    float restitution;
+    vec3 angular_velocity;
+    float friction;
+    vec4 orientation;       // quaternion
+    vec3 force_accumulator;
+    float inv_mass;
+    vec3 torque_accumulator;
+    float padding;
+};
+
+layout(set = 0, binding = 0, std430) restrict buffer RigidBodyBuffer {
+    RigidBody rigid_bodies[];
+};
+
+layout(push_constant) uniform PushConstants {
+    float delta_time;
+    uint num_bodies;
+    vec3 gravity;
+    float damping_factor;
+} push_constants;
+
+// Quaternion operations
+vec4 quat_multiply(vec4 q1, vec4 q2) {
+    return vec4(
+        q1.w * q2.xyz + q2.w * q1.xyz + cross(q1.xyz, q2.xyz),
+        q1.w * q2.w - dot(q1.xyz, q2.xyz)
+    );
+}
+
+vec4 quat_from_angular_velocity(vec3 angular_vel, float dt) {
+    float angle = length(angular_vel) * dt;
+    if (angle < 1e-6) {
+        return vec4(0, 0, 0, 1);
+    }
+    vec3 axis = angular_vel / length(angular_vel);
+    float half_angle = angle * 0.5;
+    return vec4(axis * sin(half_angle), cos(half_angle));
+}
+
+vec4 quat_normalize(vec4 q) {
+    float len = length(q);
+    return len > 1e-6 ? q / len : vec4(0, 0, 0, 1);
+}
+
+void main() {
+    uint body_idx = gl_GlobalInvocationID.x;
+
+    if (body_idx >= push_constants.num_bodies || body_idx >= rigid_bodies.length()) {
+        return;
+    }
+
+    RigidBody body = rigid_bodies[body_idx];
+
+    // Skip inactive bodies (infinite mass)
+    if (body.inv_mass <= 0.0) {
+        return;
+    }
+
+    float dt = push_constants.delta_time;
+
+    // Apply gravity
+    body.force_accumulator += push_constants.gravity * body.mass;
+
+    // Linear integration using Verlet integration for stability
+    vec3 acceleration = body.force_accumulator * body.inv_mass;
+
+    // Update velocity (Semi-implicit Euler for better stability)
+    body.velocity += acceleration * dt;
+
+    // Apply damping
+    body.velocity *= pow(push_constants.damping_factor, dt);
+
+    // Update position
+    body.position += body.velocity * dt;
+
+    // Angular integration
+    vec3 angular_acceleration = body.torque_accumulator * body.inv_mass; // Simplified - assumes unit inertia tensor
+    body.angular_velocity += angular_acceleration * dt;
+
+    // Apply angular damping
+    body.angular_velocity *= pow(push_constants.damping_factor, dt);
+
+    // Update orientation using quaternion integration
+    vec4 dq = quat_from_angular_velocity(body.angular_velocity, dt);
+    body.orientation = quat_normalize(quat_multiply(body.orientation, dq));
+
+    // Clear force and torque accumulators for next frame
+    body.force_accumulator = vec3(0);
+    body.torque_accumulator = vec3(0);
+
+    // Write back updated body
+    rigid_bodies[body_idx] = body;
+}

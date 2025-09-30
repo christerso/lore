@@ -1,0 +1,485 @@
+#version 450
+
+// GPU Occlusion Processing Compute Shader - Real-time sound occlusion with ray marching
+// Complete GPU implementation for sound occlusion, diffraction, and portal-based propagation
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+// Push constants for occlusion processing
+layout(push_constant) uniform OcclusionPushConstants {
+    uint num_audio_sources;
+    uint num_listeners;
+    uint num_geometry_objects;
+    uint num_portals;
+    float max_occlusion_distance;
+    float ray_marching_step_size;
+    uint max_ray_marching_steps;
+    float diffraction_strength;
+    vec3 listener_head_size;
+    float air_absorption_factor;
+    float temperature;
+    float humidity;
+} push_constants;
+
+// Audio source for occlusion testing
+struct AudioSourceData {
+    vec3 position;
+    float volume;
+    vec3 velocity;
+    float min_distance;
+    vec3 forward_direction;
+    float max_distance;
+    uint entity_id;
+    float rolloff_factor;
+    uint directivity_pattern;
+    float outer_cone_angle;
+    uint active_flag;
+    uint padding[1];
+};
+
+// Audio listener for occlusion testing
+struct AudioListenerData {
+    vec3 position;
+    float gain;
+    vec3 velocity;
+    uint active_flag;
+    vec3 forward_direction;
+    float head_radius;
+    vec3 up_direction;
+    float ear_distance;
+    uint entity_id;
+    uint padding[3];
+};
+
+// Occlusion geometry (simplified for performance)
+struct OcclusionGeometry {
+    vec3 min_bounds;
+    float thickness;
+    vec3 max_bounds;
+    float transmission_coefficient;
+    vec3 center;
+    float absorption_coefficient;
+    vec3 extents;
+    uint geometry_type; // 0=Box, 1=Sphere, 2=Plane
+    uint material_id;
+    float roughness;
+    vec2 padding;
+};
+
+// Portal for room-to-room sound propagation
+struct AcousticPortal {
+    vec3 position;
+    float width;
+    vec3 normal;
+    float height;
+    vec3 tangent;
+    float transmission_loss;
+    uint source_room_id;
+    uint target_room_id;
+    float opening_factor; // 0.0 = closed, 1.0 = fully open
+    uint portal_type;     // 0=Doorway, 1=Window, 2=Vent
+    vec2 padding;
+};
+
+// Occlusion result for audio source-listener pair
+struct OcclusionResult {
+    float occlusion_factor;        // 0.0 = fully occluded, 1.0 = no occlusion
+    float diffraction_gain;        // Additional gain from diffraction effects
+    vec3 frequency_filtering;      // Frequency-dependent occlusion (low/mid/high)
+    float path_length_difference;  // Extra path length due to diffraction
+    vec3 effective_source_position; // Apparent source position after diffraction
+    uint num_obstructions;         // Number of objects blocking the path
+    float portal_transmission;     // Transmission through portals
+    uint dominant_material_id;     // Most significant blocking material
+};
+
+// Ray marching sample point
+struct RayMarchSample {
+    vec3 position;
+    float density;           // Occlusion density at this point
+    uint material_id;        // Material encountered at this point
+    float transmission;      // Transmission coefficient
+    vec3 gradient;           // Gradient for diffraction calculation
+    float distance_to_edge;  // Distance to nearest edge (for diffraction)
+};
+
+// Diffraction calculation workspace
+struct DiffractionWorkspace {
+    vec3 edge_position;
+    vec3 edge_direction;
+    float edge_length;
+    float diffraction_angle;
+    vec3 diffracted_direction;
+    float fresnel_coefficient;
+    float path_difference;
+    uint edge_type; // 0=Corner, 1=Edge, 2=Slit
+};
+
+// Storage buffers
+layout(set = 0, binding = 0, std430) restrict readonly buffer AudioSourceBuffer {
+    AudioSourceData audio_sources[];
+};
+
+layout(set = 0, binding = 1, std430) restrict readonly buffer AudioListenerBuffer {
+    AudioListenerData audio_listeners[];
+};
+
+layout(set = 0, binding = 2, std430) restrict readonly buffer OcclusionGeometryBuffer {
+    OcclusionGeometry geometry[];
+};
+
+layout(set = 0, binding = 3, std430) restrict readonly buffer AcousticPortalBuffer {
+    AcousticPortal portals[];
+};
+
+layout(set = 0, binding = 4, std430) restrict buffer OcclusionResultBuffer {
+    OcclusionResult occlusion_results[];
+};
+
+layout(set = 0, binding = 5, std430) restrict buffer OcclusionStatsBuffer {
+    uint total_occlusion_tests;
+    uint fully_occluded_pairs;
+    uint partial_occlusion_pairs;
+    uint diffraction_calculations;
+    float average_occlusion_factor;
+    float total_processing_time;
+    uint portal_transmissions;
+    uint padding;
+};
+
+// Shared memory for ray marching optimization
+shared float shared_density_samples[64];
+shared vec3 shared_positions[64];
+shared uint shared_material_cache[64];
+
+// Distance functions for different geometry types
+float distance_to_box(vec3 point, vec3 center, vec3 extents) {
+    vec3 d = abs(point - center) - extents;
+    return length(max(d, 0.0)) + min(max(d.x, max(d.y, d.z)), 0.0);
+}
+
+float distance_to_sphere(vec3 point, vec3 center, float radius) {
+    return length(point - center) - radius;
+}
+
+float distance_to_plane(vec3 point, vec3 plane_normal, vec3 plane_point) {
+    return abs(dot(point - plane_point, plane_normal));
+}
+
+// Sample occlusion density at a specific point
+RayMarchSample sample_occlusion_density(vec3 position) {
+    RayMarchSample sample_result;
+    sample_result.position = position;
+    sample_result.density = 0.0;
+    sample_result.material_id = 0;
+    sample_result.transmission = 1.0;
+    sample_result.gradient = vec3(0.0);
+    sample_result.distance_to_edge = 1e6;
+
+    // Test against all geometry objects
+    for (uint i = 0; i < push_constants.num_geometry_objects && i < geometry.length(); i++) {
+        OcclusionGeometry geom = geometry[i];
+        float distance_to_surface;
+
+        // Calculate distance based on geometry type
+        if (geom.geometry_type == 0u) { // Box
+            distance_to_surface = distance_to_box(position, geom.center, geom.extents);
+        } else if (geom.geometry_type == 1u) { // Sphere
+            distance_to_surface = distance_to_sphere(position, geom.center, geom.extents.x);
+        } else { // Plane
+            distance_to_surface = distance_to_plane(position, normalize(geom.center), geom.center);
+        }
+
+        // Check if point is inside geometry
+        if (distance_to_surface < 0.0) {
+            // Inside object - accumulate occlusion
+            float depth = -distance_to_surface;
+            float material_density = 1.0 - geom.transmission_coefficient;
+
+            // Thickness-based attenuation
+            float thickness_factor = min(depth / geom.thickness, 1.0);
+            float local_density = material_density * thickness_factor;
+
+            sample_result.density += local_density;
+            sample_result.transmission *= (1.0 - local_density * geom.absorption_coefficient);
+
+            if (local_density > sample_result.density) {
+                sample_result.material_id = geom.material_id;
+            }
+        } else {
+            // Outside object - track distance to edge for diffraction
+            sample_result.distance_to_edge = min(sample_result.distance_to_edge, distance_to_surface);
+        }
+    }
+
+    // Clamp density and ensure transmission is valid
+    sample_result.density = clamp(sample_result.density, 0.0, 1.0);
+    sample_result.transmission = clamp(sample_result.transmission, 0.0, 1.0);
+
+    return sample_result;
+}
+
+// Perform ray marching between source and listener
+OcclusionResult perform_ray_marching_occlusion(vec3 source_pos, vec3 listener_pos) {
+    OcclusionResult result;
+    result.occlusion_factor = 1.0;
+    result.diffraction_gain = 0.0;
+    result.frequency_filtering = vec3(1.0, 1.0, 1.0);
+    result.path_length_difference = 0.0;
+    result.effective_source_position = source_pos;
+    result.num_obstructions = 0;
+    result.portal_transmission = 1.0;
+    result.dominant_material_id = 0;
+
+    vec3 ray_direction = normalize(listener_pos - source_pos);
+    float total_distance = length(listener_pos - source_pos);
+    float step_size = push_constants.ray_marching_step_size;
+    uint num_steps = min(uint(total_distance / step_size), push_constants.max_ray_marching_steps);
+
+    float accumulated_occlusion = 0.0;
+    float total_transmission = 1.0;
+    uint material_encounters = 0;
+    float max_density_encountered = 0.0;
+    uint dominant_material = 0;
+
+    // March along the ray from source to listener
+    for (uint step = 0; step < num_steps; step++) {
+        float t = float(step) / float(num_steps);
+        vec3 sample_position = mix(source_pos, listener_pos, t);
+
+        RayMarchSample sample_data = sample_occlusion_density(sample_position);
+
+        if (sample_data.density > 0.0) {
+            // Accumulate occlusion
+            accumulated_occlusion += sample_data.density * step_size;
+            total_transmission *= sample_data.transmission;
+            material_encounters++;
+
+            if (sample_data.density > max_density_encountered) {
+                max_density_encountered = sample_data.density;
+                dominant_material = sample_data.material_id;
+            }
+
+            // Track number of discrete obstructions
+            if (sample_data.density > 0.5) {
+                result.num_obstructions++;
+            }
+        }
+    }
+
+    // Calculate final occlusion factor
+    result.occlusion_factor = total_transmission;
+    result.dominant_material_id = dominant_material;
+
+    // Frequency-dependent filtering based on occlusion
+    float occlusion_strength = 1.0 - result.occlusion_factor;
+
+    // Low frequencies penetrate better than high frequencies
+    result.frequency_filtering.x = 1.0 - occlusion_strength * 0.3; // Low frequency (250Hz)
+    result.frequency_filtering.y = 1.0 - occlusion_strength * 0.7; // Mid frequency (1kHz)
+    result.frequency_filtering.z = 1.0 - occlusion_strength * 0.9; // High frequency (4kHz)
+
+    return result;
+}
+
+// Calculate diffraction around obstacles using Fresnel theory
+void calculate_diffraction_effects(vec3 source_pos, vec3 listener_pos, inout OcclusionResult result) {
+    // Find potential diffraction edges
+    vec3 direct_path = listener_pos - source_pos;
+    float direct_distance = length(direct_path);
+    vec3 direct_direction = direct_path / direct_distance;
+
+    // Search for edges that could provide diffraction paths
+    for (uint i = 0; i < push_constants.num_geometry_objects && i < geometry.length(); i++) {
+        OcclusionGeometry geom = geometry[i];
+
+        // For simplicity, assume box geometry and find nearest edge
+        if (geom.geometry_type == 0u) { // Box
+            vec3 box_min = geom.center - geom.extents;
+            vec3 box_max = geom.center + geom.extents;
+
+            // Check each edge of the box for potential diffraction
+            vec3 edge_candidates[12] = {
+                // Bottom edges
+                vec3(box_min.x, box_min.y, box_min.z), vec3(box_max.x, box_min.y, box_min.z),
+                vec3(box_max.x, box_min.y, box_min.z), vec3(box_max.x, box_min.y, box_max.z),
+                vec3(box_max.x, box_min.y, box_max.z), vec3(box_min.x, box_min.y, box_max.z),
+                vec3(box_min.x, box_min.y, box_max.z), vec3(box_min.x, box_min.y, box_min.z),
+                // Top edges
+                vec3(box_min.x, box_max.y, box_min.z), vec3(box_max.x, box_max.y, box_min.z),
+                vec3(box_max.x, box_max.y, box_min.z), vec3(box_max.x, box_max.y, box_max.z),
+                vec3(box_max.x, box_max.y, box_max.z), vec3(box_min.x, box_max.y, box_max.z)
+            };
+
+            for (uint edge_idx = 0; edge_idx < 12; edge_idx += 2) {
+                vec3 edge_start = edge_candidates[edge_idx];
+                vec3 edge_end = edge_candidates[edge_idx + 1];
+                vec3 edge_direction = normalize(edge_end - edge_start);
+                float edge_length = length(edge_end - edge_start);
+
+                // Find closest point on edge to the direct path
+                vec3 to_source = source_pos - edge_start;
+                vec3 to_listener = listener_pos - edge_start;
+
+                float t_source = clamp(dot(to_source, edge_direction) / edge_length, 0.0, 1.0);
+                float t_listener = clamp(dot(to_listener, edge_direction) / edge_length, 0.0, 1.0);
+
+                vec3 edge_point_source = edge_start + t_source * edge_length * edge_direction;
+                vec3 edge_point_listener = edge_start + t_listener * edge_length * edge_direction;
+
+                // Use average of the two closest points
+                vec3 diffraction_point = (edge_point_source + edge_point_listener) * 0.5;
+
+                // Calculate diffraction path length
+                float diffraction_distance = length(source_pos - diffraction_point) + length(diffraction_point - listener_pos);
+                float path_difference = diffraction_distance - direct_distance;
+
+                // Fresnel calculation for diffraction strength
+                float wavelength = 343.0 / 1000.0; // 1kHz wavelength at 343 m/s
+                float fresnel_number = sqrt(2.0 * path_difference / wavelength);
+
+                // Approximation of Fresnel diffraction
+                float diffraction_loss = 1.0;
+                if (fresnel_number > 0.1) {
+                    diffraction_loss = exp(-0.8 * fresnel_number);
+                }
+
+                // Apply diffraction contribution
+                float diffraction_contribution = diffraction_loss * push_constants.diffraction_strength;
+
+                if (diffraction_contribution > result.diffraction_gain) {
+                    result.diffraction_gain = diffraction_contribution;
+                    result.path_length_difference = path_difference;
+                    result.effective_source_position = diffraction_point;
+                }
+            }
+        }
+    }
+
+    // Apply diffraction to overall occlusion
+    result.occlusion_factor = min(1.0, result.occlusion_factor + result.diffraction_gain);
+}
+
+// Check for portal-based sound transmission
+void calculate_portal_transmission(vec3 source_pos, vec3 listener_pos, inout OcclusionResult result) {
+    for (uint i = 0; i < push_constants.num_portals && i < portals.length(); i++) {
+        AcousticPortal portal = portals[i];
+
+        // Calculate transmission through portal
+        vec3 to_portal = portal.position - source_pos;
+        vec3 portal_to_listener = listener_pos - portal.position;
+
+        float source_to_portal_dist = length(to_portal);
+        float portal_to_listener_dist = length(portal_to_listener);
+
+        // Check if portal is roughly between source and listener
+        vec3 direct_path = normalize(listener_pos - source_pos);
+        vec3 to_portal_norm = normalize(to_portal);
+
+        float alignment = dot(direct_path, to_portal_norm);
+
+        if (alignment > 0.7) { // Portal is roughly in the right direction
+            // Calculate portal transmission based on opening factor and transmission loss
+            float portal_area = portal.width * portal.height;
+            float transmission_efficiency = portal.opening_factor * portal_area / (portal_area + 1.0);
+            float distance_attenuation = 1.0 / (1.0 + (source_to_portal_dist + portal_to_listener_dist) * 0.01);
+
+            float portal_contribution = transmission_efficiency * distance_attenuation * (1.0 - portal.transmission_loss);
+
+            result.portal_transmission = max(result.portal_transmission, portal_contribution);
+        }
+    }
+
+    // Combine portal transmission with direct occlusion
+    result.occlusion_factor = max(result.occlusion_factor, result.portal_transmission);
+}
+
+// Apply atmospheric effects based on environmental conditions
+void apply_atmospheric_effects(float distance, inout OcclusionResult result) {
+    // Temperature and humidity effects on high-frequency attenuation
+    float temp_factor = 1.0 + (push_constants.temperature - 20.0) * 0.001;
+    float humidity_factor = 1.0 + push_constants.humidity * 0.0001;
+
+    // Distance-based air absorption (primarily affects high frequencies)
+    float air_absorption = push_constants.air_absorption_factor * distance * temp_factor * humidity_factor;
+
+    result.frequency_filtering.z *= exp(-air_absorption); // High frequency attenuation
+    result.frequency_filtering.y *= exp(-air_absorption * 0.5); // Mid frequency slight attenuation
+    // Low frequencies largely unaffected
+}
+
+void main() {
+    uint thread_id = gl_GlobalInvocationID.x;
+
+    // Calculate source-listener pair from thread ID
+    uint source_id = thread_id / push_constants.num_listeners;
+    uint listener_id = thread_id % push_constants.num_listeners;
+
+    // Bounds checking
+    if (source_id >= push_constants.num_audio_sources ||
+        listener_id >= push_constants.num_listeners ||
+        source_id >= audio_sources.length() ||
+        listener_id >= audio_listeners.length()) {
+        return;
+    }
+
+    // Skip inactive sources or listeners
+    if (audio_sources[source_id].active_flag == 0 || audio_listeners[listener_id].active_flag == 0) {
+        return;
+    }
+
+    vec3 source_pos = audio_sources[source_id].position;
+    vec3 listener_pos = audio_listeners[listener_id].position;
+    float distance = length(listener_pos - source_pos);
+
+    // Skip if distance exceeds maximum occlusion test distance
+    if (distance > push_constants.max_occlusion_distance) {
+        uint result_idx = source_id * push_constants.num_listeners + listener_id;
+        if (result_idx < occlusion_results.length()) {
+            occlusion_results[result_idx].occlusion_factor = 1.0;
+            occlusion_results[result_idx].diffraction_gain = 0.0;
+            occlusion_results[result_idx].frequency_filtering = vec3(1.0);
+            occlusion_results[result_idx].path_length_difference = 0.0;
+            occlusion_results[result_idx].effective_source_position = source_pos;
+            occlusion_results[result_idx].num_obstructions = 0;
+            occlusion_results[result_idx].portal_transmission = 1.0;
+            occlusion_results[result_idx].dominant_material_id = 0;
+        }
+        return;
+    }
+
+    // Perform ray marching occlusion test
+    OcclusionResult result = perform_ray_marching_occlusion(source_pos, listener_pos);
+
+    // Calculate diffraction effects if there's significant occlusion
+    if (result.occlusion_factor < 0.8) {
+        calculate_diffraction_effects(source_pos, listener_pos, result);
+        atomicAdd(diffraction_calculations, 1);
+    }
+
+    // Check for portal-based transmission
+    calculate_portal_transmission(source_pos, listener_pos, result);
+
+    // Apply atmospheric effects
+    apply_atmospheric_effects(distance, result);
+
+    // Store result
+    uint result_idx = source_id * push_constants.num_listeners + listener_id;
+    if (result_idx < occlusion_results.length()) {
+        occlusion_results[result_idx] = result;
+    }
+
+    // Update statistics
+    atomicAdd(total_occlusion_tests, 1);
+    atomicAdd(average_occlusion_factor, result.occlusion_factor);
+
+    if (result.occlusion_factor < 0.1) {
+        atomicAdd(fully_occluded_pairs, 1);
+    } else if (result.occlusion_factor < 0.9) {
+        atomicAdd(partial_occlusion_pairs, 1);
+    }
+
+    if (result.portal_transmission > 0.1) {
+        atomicAdd(portal_transmissions, 1);
+    }
+}

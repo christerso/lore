@@ -1,0 +1,121 @@
+#version 450
+
+// GPU Arena Allocator Compute Shader
+// Provides autonomous GPU memory allocation for audio processing
+
+layout(local_size_x = 32, local_size_y = 1, local_size_z = 1) in;
+
+// Arena metadata buffer
+layout(std140, binding = 0) buffer ArenaMetadataBuffer {
+    uint next_offset;
+    uint total_size;
+    uint free_list_head;
+    uint allocation_count;
+    uint arena_id;
+    uint padding[3];
+} arena_metadata[];
+
+// Allocation request buffer
+layout(std140, binding = 1) buffer AllocationRequestBuffer {
+    uint size;
+    uint alignment;
+    uint arena_id;
+    uint result_offset;
+    uint success;
+    uint padding[3];
+} allocation_requests[];
+
+// Free list buffer for deallocated blocks
+layout(std140, binding = 2) buffer FreeListBuffer {
+    uint next_free;
+    uint size;
+    uint padding[2];
+} free_list[];
+
+// Push constants
+layout(push_constant) uniform PushConstants {
+    uint request_count;
+    uint max_arenas;
+    uint enable_compaction;
+    uint padding;
+} params;
+
+// Atomic operations helper
+uint atomic_allocate(uint arena_idx, uint size, uint alignment) {
+    // Align size to requested alignment
+    uint aligned_size = ((size + alignment - 1) / alignment) * alignment;
+
+    // Try to find free block first
+    uint free_idx = atomicExchange(arena_metadata[arena_idx].free_list_head, 0xFFFFFFFF);
+
+    while (free_idx != 0xFFFFFFFF) {
+        uint next_free = free_list[free_idx].next_free;
+        uint free_size = free_list[free_idx].size;
+
+        if (free_size >= aligned_size) {
+            // Use this free block
+            if (free_size > aligned_size + 64) {
+                // Split the block if remainder is large enough
+                uint remainder_idx = free_idx + (aligned_size / 8); // Assuming 8-byte units
+                free_list[remainder_idx].next_free = next_free;
+                free_list[remainder_idx].size = free_size - aligned_size;
+
+                // Update free list head
+                atomicExchange(arena_metadata[arena_idx].free_list_head, remainder_idx);
+            } else {
+                // Use entire block
+                atomicExchange(arena_metadata[arena_idx].free_list_head, next_free);
+            }
+
+            atomicAdd(arena_metadata[arena_idx].allocation_count, 1);
+            return free_idx * 8; // Convert to byte offset
+        }
+
+        free_idx = next_free;
+    }
+
+    // No suitable free block, allocate from end
+    uint old_offset = atomicAdd(arena_metadata[arena_idx].next_offset, aligned_size);
+
+    if (old_offset + aligned_size <= arena_metadata[arena_idx].total_size) {
+        atomicAdd(arena_metadata[arena_idx].allocation_count, 1);
+        return old_offset;
+    }
+
+    // Out of memory
+    return 0xFFFFFFFF;
+}
+
+void main() {
+    uint request_idx = gl_GlobalInvocationID.x;
+
+    if (request_idx >= params.request_count) {
+        return;
+    }
+
+    uint arena_id = allocation_requests[request_idx].arena_id;
+    uint size = allocation_requests[request_idx].size;
+    uint alignment = allocation_requests[request_idx].alignment;
+
+    // Find arena
+    uint arena_idx = 0xFFFFFFFF;
+    for (uint i = 0; i < params.max_arenas; ++i) {
+        if (arena_metadata[i].arena_id == arena_id) {
+            arena_idx = i;
+            break;
+        }
+    }
+
+    if (arena_idx == 0xFFFFFFFF) {
+        // Arena not found
+        allocation_requests[request_idx].result_offset = 0xFFFFFFFF;
+        allocation_requests[request_idx].success = 0;
+        return;
+    }
+
+    // Perform allocation
+    uint offset = atomic_allocate(arena_idx, size, alignment);
+
+    allocation_requests[request_idx].result_offset = offset;
+    allocation_requests[request_idx].success = (offset != 0xFFFFFFFF) ? 1 : 0;
+}

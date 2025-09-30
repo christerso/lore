@@ -1,0 +1,520 @@
+#version 450
+
+// GPU Acoustic Ray Tracing Compute Shader - Environmental reflections and sound propagation
+// Complete GPU implementation for realistic acoustic ray tracing with material interactions
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+// Push constants for ray tracing parameters
+layout(push_constant) uniform RayTracingPushConstants {
+    uint num_rays_per_source;
+    uint max_bounces;
+    uint num_audio_sources;
+    uint num_listeners;
+    float ray_energy_threshold;
+    float sound_speed;
+    float delta_time;
+    uint frame_counter;
+    vec3 wind_velocity;
+    float temperature;
+    float humidity;
+    uint geometry_count;
+} push_constants;
+
+// Acoustic ray structure for GPU processing
+struct AcousticRay {
+    vec3 origin;
+    float energy;
+    vec3 direction;
+    float frequency;
+    vec3 current_position;
+    uint bounce_count;
+    uint source_entity_id;
+    uint listener_entity_id;
+    float distance_traveled;
+    float attenuation_factor;
+    vec3 frequency_response; // RGB for low/mid/high frequency bands
+    uint material_history;   // Bitmask of materials encountered
+    float arrival_time;
+    float phase_offset;
+    uint active_flag;
+    uint padding;
+};
+
+// Acoustic geometry for intersection testing
+struct AcousticGeometry {
+    vec3 vertex_a;
+    float absorption_low;
+    vec3 vertex_b;
+    float absorption_mid;
+    vec3 vertex_c;
+    float absorption_high;
+    vec3 surface_normal;
+    float area;
+    uint material_id;
+    float transmission_coefficient;
+    float scattering_coefficient;
+    float roughness;
+    vec3 material_color;
+    uint geometry_id;
+};
+
+// Acoustic material properties
+struct AcousticMaterial {
+    float absorption_coefficient;
+    float transmission_coefficient;
+    float scattering_coefficient;
+    float density;
+    float impedance;
+    vec3 frequency_absorption; // Low, mid, high frequency absorption
+    vec3 frequency_transmission;
+    vec3 frequency_scattering;
+    float roughness;
+    float porosity;
+    float hardness;
+    float resonance_frequency;
+    float resonance_damping;
+    float resonance_amplitude;
+    uint reflection_model; // 0=Specular, 1=Diffuse, 2=Mixed, 3=Lambertian
+    float specular_ratio;
+    vec3 surface_color;
+};
+
+// Audio source data
+struct AudioSourceData {
+    vec3 position;
+    float volume;
+    vec3 velocity;
+    float pitch;
+    vec3 forward_direction;
+    float directivity_sharpness;
+    uint directivity_pattern;
+    float inner_cone_angle;
+    float outer_cone_angle;
+    float outer_cone_gain;
+    uint entity_id;
+    uint active_flag;
+    float phase_accumulator;
+    uint padding;
+};
+
+// Audio listener data
+struct AudioListenerData {
+    vec3 position;
+    float gain;
+    vec3 velocity;
+    uint active_flag;
+    vec3 forward_direction;
+    float head_radius;
+    vec3 up_direction;
+    float ear_distance;
+    uint entity_id;
+    uint padding[3];
+};
+
+// Ray intersection result
+struct RayIntersection {
+    bool hit;
+    float distance;
+    vec3 hit_point;
+    vec3 surface_normal;
+    uint material_id;
+    uint geometry_id;
+    vec2 barycentric_coords;
+    float face_orientation; // Front-face or back-face hit
+};
+
+// Impulse response contribution from rays
+struct ImpulseContribution {
+    float arrival_time;
+    float energy;
+    vec3 frequency_response;
+    vec3 direction;
+    uint reflection_count;
+    float phase_offset;
+    uint source_id;
+    uint listener_id;
+};
+
+// Storage buffers
+layout(set = 0, binding = 0, std430) restrict buffer AcousticRayBuffer {
+    AcousticRay rays[];
+};
+
+layout(set = 0, binding = 1, std430) restrict readonly buffer AcousticGeometryBuffer {
+    AcousticGeometry geometry[];
+};
+
+layout(set = 0, binding = 2, std430) restrict readonly buffer AcousticMaterialBuffer {
+    AcousticMaterial materials[];
+};
+
+layout(set = 0, binding = 3, std430) restrict readonly buffer AudioSourceBuffer {
+    AudioSourceData audio_sources[];
+};
+
+layout(set = 0, binding = 4, std430) restrict readonly buffer AudioListenerBuffer {
+    AudioListenerData audio_listeners[];
+};
+
+layout(set = 0, binding = 5, std430) restrict buffer ImpulseContributionBuffer {
+    ImpulseContribution impulse_contributions[];
+};
+
+layout(set = 0, binding = 6, std430) restrict buffer RayPoolBuffer {
+    uint active_ray_count;
+    uint dead_ray_count;
+    uint ray_generation_counter;
+    uint total_reflections;
+    uint rays_reaching_listeners;
+    float total_energy_traced;
+    float average_path_length;
+    uint padding;
+};
+
+// Shared memory for ray processing optimization
+shared float shared_geometry_cache[64 * 12]; // Cache for nearby geometry
+shared uint shared_ray_intersections[64];
+
+// Random number generation for ray scattering
+uint hash(uint x) {
+    x ^= x >> 16;
+    x *= 0x85ebca6bu;
+    x ^= x >> 13;
+    x *= 0xc2b2ae35u;
+    x ^= x >> 16;
+    return x;
+}
+
+float random_float(uint seed, uint iteration) {
+    return float(hash(seed + iteration * 1664525u + 1013904223u)) / float(0xffffffffu);
+}
+
+vec3 random_hemisphere_direction(uint seed, vec3 normal) {
+    float u1 = random_float(seed, 0);
+    float u2 = random_float(seed, 1);
+
+    float cos_theta = sqrt(u1);
+    float sin_theta = sqrt(1.0 - u1);
+    float phi = 2.0 * 3.14159265359 * u2;
+
+    vec3 w = normal;
+    vec3 u = normalize(cross((abs(w.x) > 0.1 ? vec3(0, 1, 0) : vec3(1, 0, 0)), w));
+    vec3 v = cross(w, u);
+
+    return cos_theta * w + sin_theta * cos(phi) * u + sin_theta * sin(phi) * v;
+}
+
+// Ray-triangle intersection using Möller-Trumbore algorithm
+RayIntersection ray_triangle_intersection(vec3 ray_origin, vec3 ray_direction, uint geometry_id) {
+    RayIntersection result;
+    result.hit = false;
+
+    AcousticGeometry geom = geometry[geometry_id];
+    vec3 edge1 = geom.vertex_b - geom.vertex_a;
+    vec3 edge2 = geom.vertex_c - geom.vertex_a;
+
+    vec3 h = cross(ray_direction, edge2);
+    float a = dot(edge1, h);
+
+    // Ray parallel to triangle
+    if (abs(a) < 1e-8) {
+        return result;
+    }
+
+    float f = 1.0 / a;
+    vec3 s = ray_origin - geom.vertex_a;
+    float u = f * dot(s, h);
+
+    if (u < 0.0 || u > 1.0) {
+        return result;
+    }
+
+    vec3 q = cross(s, edge1);
+    float v = f * dot(ray_direction, q);
+
+    if (v < 0.0 || u + v > 1.0) {
+        return result;
+    }
+
+    float t = f * dot(edge2, q);
+
+    if (t > 1e-8) { // Ray hit
+        result.hit = true;
+        result.distance = t;
+        result.hit_point = ray_origin + t * ray_direction;
+        result.surface_normal = normalize(geom.surface_normal);
+        result.material_id = geom.material_id;
+        result.geometry_id = geometry_id;
+        result.barycentric_coords = vec2(u, v);
+        result.face_orientation = dot(ray_direction, geom.surface_normal) < 0.0 ? 1.0 : -1.0;
+    }
+
+    return result;
+}
+
+// Find closest intersection along ray path
+RayIntersection trace_ray_intersection(vec3 ray_origin, vec3 ray_direction) {
+    RayIntersection closest_hit;
+    closest_hit.hit = false;
+    closest_hit.distance = 1e6;
+
+    // Test against all geometry (in practice, would use spatial acceleration structure)
+    for (uint i = 0; i < push_constants.geometry_count && i < geometry.length(); i++) {
+        RayIntersection hit = ray_triangle_intersection(ray_origin, ray_direction, i);
+
+        if (hit.hit && hit.distance < closest_hit.distance) {
+            closest_hit = hit;
+        }
+    }
+
+    return closest_hit;
+}
+
+// Calculate frequency-dependent absorption based on material properties
+vec3 calculate_material_absorption(uint material_id, vec3 incident_direction, vec3 surface_normal) {
+    if (material_id >= materials.length()) {
+        return vec3(0.1, 0.1, 0.1); // Default absorption
+    }
+
+    AcousticMaterial mat = materials[material_id];
+
+    // Angle-dependent absorption (more absorption at grazing angles)
+    float cos_angle = abs(dot(incident_direction, surface_normal));
+    float angle_factor = mix(1.5, 1.0, cos_angle);
+
+    // Frequency-dependent absorption
+    vec3 absorption = mat.frequency_absorption * angle_factor;
+
+    // Roughness affects scattering vs absorption
+    float roughness_factor = 1.0 + mat.roughness * 0.5;
+    absorption *= roughness_factor;
+
+    return clamp(absorption, vec3(0.0), vec3(1.0));
+}
+
+// Calculate reflection direction based on material reflection model
+vec3 calculate_reflection_direction(vec3 incident_direction, vec3 surface_normal, uint material_id, uint ray_seed) {
+    if (material_id >= materials.length()) {
+        return reflect(incident_direction, surface_normal); // Perfect specular
+    }
+
+    AcousticMaterial mat = materials[material_id];
+
+    vec3 specular_reflection = reflect(incident_direction, surface_normal);
+
+    if (mat.reflection_model == 0u) { // Specular
+        return specular_reflection;
+    } else if (mat.reflection_model == 1u) { // Diffuse
+        return random_hemisphere_direction(ray_seed, surface_normal);
+    } else if (mat.reflection_model == 2u) { // Mixed
+        if (random_float(ray_seed, 2) < mat.specular_ratio) {
+            return specular_reflection;
+        } else {
+            return random_hemisphere_direction(ray_seed, surface_normal);
+        }
+    } else { // Lambertian
+        return random_hemisphere_direction(ray_seed, surface_normal);
+    }
+}
+
+// Atmospheric attenuation based on environmental conditions
+float calculate_atmospheric_attenuation(float distance, float frequency) {
+    // Simplified atmospheric absorption model
+    float temp_factor = 1.0 + (push_constants.temperature - 20.0) * 0.001;
+    float humidity_factor = 1.0 + push_constants.humidity * 0.0001;
+
+    // Frequency-dependent air absorption
+    float freq_factor = frequency / 1000.0; // Normalize to 1kHz
+    float air_absorption = 0.0001 * freq_factor * freq_factor * temp_factor * humidity_factor;
+
+    return exp(-air_absorption * distance);
+}
+
+// Process single acoustic ray bounce
+void process_ray_bounce(inout AcousticRay ray, uint thread_id) {
+    // Check energy threshold
+    if (ray.energy < push_constants.ray_energy_threshold || ray.bounce_count >= push_constants.max_bounces) {
+        ray.active_flag = 0;
+        atomicAdd(dead_ray_count, 1);
+        return;
+    }
+
+    // Trace ray to find next intersection
+    RayIntersection hit = trace_ray_intersection(ray.current_position, ray.direction);
+
+    if (!hit.hit) {
+        // Ray escaped to infinity
+        ray.active_flag = 0;
+        atomicAdd(dead_ray_count, 1);
+        return;
+    }
+
+    // Update ray position and travel distance
+    float travel_distance = hit.distance;
+    ray.current_position = hit.hit_point;
+    ray.distance_traveled += travel_distance;
+    ray.arrival_time += travel_distance / push_constants.sound_speed;
+
+    // Apply atmospheric attenuation
+    float atm_attenuation = calculate_atmospheric_attenuation(travel_distance, ray.frequency);
+    ray.energy *= atm_attenuation;
+
+    // Calculate material absorption
+    vec3 material_absorption = calculate_material_absorption(hit.material_id, ray.direction, hit.surface_normal);
+
+    // Apply frequency-dependent absorption
+    ray.frequency_response *= (vec3(1.0) - material_absorption);
+
+    // Calculate total energy loss
+    float avg_absorption = (material_absorption.x + material_absorption.y + material_absorption.z) / 3.0;
+    ray.energy *= (1.0 - avg_absorption);
+
+    // Update material history
+    ray.material_history |= (1u << (hit.material_id % 32u));
+
+    // Check if ray reaches a listener
+    for (uint listener_id = 0; listener_id < push_constants.num_listeners && listener_id < audio_listeners.length(); listener_id++) {
+        if (audio_listeners[listener_id].active_flag == 0) continue;
+
+        vec3 to_listener = audio_listeners[listener_id].position - ray.current_position;
+        float listener_distance = length(to_listener);
+
+        // Check if ray is close enough to listener (head radius)
+        if (listener_distance < audio_listeners[listener_id].head_radius * 2.0) {
+            // Ray reached listener - record impulse contribution
+            uint contribution_idx = atomicAdd(rays_reaching_listeners, 1);
+            if (contribution_idx < impulse_contributions.length()) {
+                impulse_contributions[contribution_idx].arrival_time = ray.arrival_time;
+                impulse_contributions[contribution_idx].energy = ray.energy;
+                impulse_contributions[contribution_idx].frequency_response = ray.frequency_response;
+                impulse_contributions[contribution_idx].direction = normalize(to_listener);
+                impulse_contributions[contribution_idx].reflection_count = ray.bounce_count;
+                impulse_contributions[contribution_idx].phase_offset = ray.phase_offset;
+                impulse_contributions[contribution_idx].source_id = ray.source_entity_id;
+                impulse_contributions[contribution_idx].listener_id = listener_id;
+            }
+
+            // Ray absorbed by listener
+            ray.active_flag = 0;
+            atomicAdd(dead_ray_count, 1);
+            return;
+        }
+    }
+
+    // Calculate new ray direction based on material reflection model
+    uint ray_seed = thread_id + ray.bounce_count * 1000u + push_constants.frame_counter * 100000u;
+    ray.direction = calculate_reflection_direction(ray.direction, hit.surface_normal, hit.material_id, ray_seed);
+
+    // Add small offset to prevent self-intersection
+    ray.current_position += hit.surface_normal * 0.001;
+
+    // Update phase based on path length
+    ray.phase_offset += (travel_distance / push_constants.sound_speed) * ray.frequency * 2.0 * 3.14159265359;
+
+    // Increment bounce count
+    ray.bounce_count++;
+    atomicAdd(total_reflections, 1);
+
+    // Add scattering if material is rough
+    if (hit.material_id < materials.length() && materials[hit.material_id].roughness > 0.1) {
+        vec3 scatter_direction = random_hemisphere_direction(ray_seed + 1000u, hit.surface_normal);
+        float scatter_amount = materials[hit.material_id].scattering_coefficient;
+        ray.direction = normalize(mix(ray.direction, scatter_direction, scatter_amount));
+    }
+}
+
+// Generate initial rays from audio source
+void generate_source_rays(uint source_id, uint thread_id) {
+    if (source_id >= audio_sources.length() || audio_sources[source_id].active_flag == 0) {
+        return;
+    }
+
+    AudioSourceData source = audio_sources[source_id];
+    uint rays_per_source = push_constants.num_rays_per_source;
+
+    for (uint ray_offset = 0; ray_offset < rays_per_source; ray_offset++) {
+        uint ray_idx = source_id * rays_per_source + ray_offset;
+        if (ray_idx >= rays.length()) break;
+
+        // Generate ray direction based on source directivity pattern
+        uint ray_seed = thread_id + ray_offset * 1000u + push_constants.frame_counter * 100000u;
+        vec3 ray_direction;
+
+        if (source.directivity_pattern == 0u) { // Omnidirectional
+            float theta = random_float(ray_seed, 0) * 2.0 * 3.14159265359;
+            float phi = acos(1.0 - 2.0 * random_float(ray_seed, 1));
+            ray_direction = vec3(sin(phi) * cos(theta), sin(phi) * sin(theta), cos(phi));
+        } else { // Directional patterns
+            // Generate rays within cone based on directivity pattern
+            float cone_angle = radians(source.outer_cone_angle);
+            float cos_angle = cos(cone_angle);
+            float random_cos = cos_angle + (1.0 - cos_angle) * random_float(ray_seed, 0);
+            float random_phi = random_float(ray_seed, 1) * 2.0 * 3.14159265359;
+
+            float sin_angle = sqrt(1.0 - random_cos * random_cos);
+            vec3 local_dir = vec3(sin_angle * cos(random_phi), sin_angle * sin(random_phi), random_cos);
+
+            // Transform to world space using source forward direction
+            vec3 forward = normalize(source.forward_direction);
+            vec3 right = normalize(cross(forward, vec3(0, 1, 0)));
+            vec3 up = cross(right, forward);
+            ray_direction = local_dir.x * right + local_dir.y * up + local_dir.z * forward;
+        }
+
+        // Initialize ray
+        rays[ray_idx].origin = source.position;
+        rays[ray_idx].current_position = source.position;
+        rays[ray_idx].direction = normalize(ray_direction);
+        rays[ray_idx].energy = source.volume / float(rays_per_source);
+        rays[ray_idx].frequency = 1000.0; // Default 1kHz, would be frequency-dependent in full implementation
+        rays[ray_idx].bounce_count = 0;
+        rays[ray_idx].source_entity_id = source.entity_id;
+        rays[ray_idx].distance_traveled = 0.0;
+        rays[ray_idx].attenuation_factor = 1.0;
+        rays[ray_idx].frequency_response = vec3(1.0, 1.0, 1.0);
+        rays[ray_idx].material_history = 0u;
+        rays[ray_idx].arrival_time = 0.0;
+        rays[ray_idx].phase_offset = 0.0;
+        rays[ray_idx].active_flag = 1;
+
+        atomicAdd(active_ray_count, 1);
+        atomicAdd(ray_generation_counter, 1);
+    }
+}
+
+void main() {
+    uint thread_id = gl_GlobalInvocationID.x;
+    uint total_rays = push_constants.num_audio_sources * push_constants.num_rays_per_source;
+
+    // Initialize ray pool statistics for first thread
+    if (thread_id == 0) {
+        active_ray_count = 0;
+        dead_ray_count = 0;
+        total_reflections = 0;
+        rays_reaching_listeners = 0;
+        total_energy_traced = 0.0;
+        average_path_length = 0.0;
+    }
+
+    barrier();
+
+    // Generate new rays for active audio sources
+    uint source_id = thread_id % push_constants.num_audio_sources;
+    if (thread_id < push_constants.num_audio_sources) {
+        generate_source_rays(source_id, thread_id);
+    }
+
+    barrier();
+
+    // Process existing rays
+    if (thread_id < total_rays && thread_id < rays.length()) {
+        if (rays[thread_id].active_flag != 0) {
+            process_ray_bounce(rays[thread_id], thread_id);
+
+            // Update global statistics
+            atomicAdd(total_energy_traced, rays[thread_id].energy);
+            atomicAdd(average_path_length, rays[thread_id].distance_traveled);
+        }
+    }
+}

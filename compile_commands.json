@@ -1,0 +1,147 @@
+[
+  {
+    "directory": "G:/repos/lore",
+    "command": "clang++ -std=c++23 -Wall -Wextra -DVULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1 -DWIN32 -D_WINDOWS -DLORE_GRAPHICS_VULKAN=1 -DGLFW_INCLUDE_VULKAN -DSTB_IMAGE_IMPLEMENTATION -DMINIAUDIO_IMPLEMENTATION -DVMA_IMPLEMENTATION -DVK_USE_PLATFORM_WIN32_KHR -DNOMINMAX -DWIN32_LEAN_AND_MEAN -D_CRT_SECURE_NO_WARNINGS -IG:/repos/lore/include -IG:/repos/lore/src -IG:/repos/lore/build/include -IG:/repos/lore/build/external -IG:/repos/lore/build/_deps/glfw-src/include -IG:/repos/lore/build/_deps/glm-src -IG:/repos/lore/build/_deps/vk-bootstrap-src/src -IG:/repos/lore/build/_deps/nlohmann_json-src/include -IG:/repos/lore/build/_deps/vulkanmemoryallocator-src/include -IG:/repos/lore/build/_deps/spirv-reflect-src/include -IG:/repos/lore/build/_deps/stb-src -IG:/repos/lore/build/_deps/miniaudio-src -c G:/repos/lore/src/assets/assets.cpp",
+    "file": "G:/repos/lore/src/assets/assets.cpp"
+  },
+  {
+    "directory": "G:/repos/lore",
+    "command": "clang++ -std=c++23 -Wall -Wextra -DVULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1 -DWIN32 -D_WINDOWS -DLORE_GRAPHICS_VULKAN=1 -DGLFW_INCLUDE_VULKAN -DSTB_IMAGE_IMPLEMENTATION -DMINIAUDIO_IMPLEMENTATION -DVMA_IMPLEMENTATION -DVK_USE_PLATFORM_WIN32_KHR -DNOMINMAX -DWIN32_LEAN_AND_MEAN -D_CRT_SECURE_NO_WARNINGS -IG:/repos/lore/include -IG:/repos/lore/src -IG:/repos/lore/build/include -IG:/repos/lore/build/external -IG:/repos/lore/build/_deps/glfw-src/include -IG:/repos/lore/build/_deps/glm-src -IG:/repos/lore/build/_deps/vk-bootstrap-src/src -IG:/repos/lore/build/_deps/nlohmann_json-src/include -IG:/repos/lore/build/_deps/vulkanmemoryallocator-src/include -IG:/repos/lore/build/_deps/spirv-reflect-src/include -IG:/repos/lore/build/_deps/stb-src -IG:/repos/lore/build/_deps/miniaudio-src -c G:/repos/lore/src/assets/example_usage.cpp",
+    "file": "G:/repos/lore/src/assets/example_usage.cpp"
+  },
+  {
+    "directory": "G:/repos/lore",
+    "command": "clang++ -std=c++23 -Wall -Wextra -DVULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1 -DWIN32 -D_WINDOWS -DLORE_GRAPHICS_VULKAN=1 -DGLFW_INCLUDE_VULKAN -DSTB_IMAGE_IMPLEMENTATION -DMINIAUDIO_IMPLEMENTATION -DVMA_IMPLEMENTATION -DVK_USE_PLATFORM_WIN32_KHR -DNOMINMAX -DWIN32_LEAN_AND_MEAN -D_CRT_SECURE_NO_WARNINGS -IG:/repos/lore/include -IG:/repos/lore/src -IG:/repos/lore/build/include -IG:/repos/lore/build/external -IG:/repos/lore/build/_deps/glfw-src/include -IG:/repos/lore/build/_deps/glm-src -IG:/repos/lore/build/_deps/vk-bootstrap-src/src -IG:/repos/lore/build/_deps/nlohmann_json-src/include -IG:/repos/lore/build/_deps/vulkanmemoryallocator-src/include -IG:/repos/lore/build/_deps/spirv-reflect-src/include -IG:/repos/lore/build/_deps/stb-src -IG:/repos/lore/build/_deps/miniaudio-src -c G:/repos/lore/src/audio/audio.cpp",
+    "file": "G:/repos/lore/src/audio/audio.cpp"
+  },
+  {
+    "directory": "G:/repos/lore",
+    "command": "clang++ -std=c++23 -Wall -Wextra -DVULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1 -DWIN32 -D_WINDOWS -DLORE_GRAPHICS_VULKAN=1 -DGLFW_INCLUDE_VULKAN -DSTB_IMAGE_IMPLEMENTATION -DMINIAUDIO_IMPLEMENTATION -DVMA_IMPLEMENTATION -DVK_USE_PLATFORM_WIN32_KHR -DNOMINMAX -DWIN32_LEAN_AND_MEAN -D_CRT_SECURE_NO_WARNINGS -IG:/repos/lore/include -IG:/repos/lore/src -IG:/repos/lore/build/include -IG:/repos/lore/build/external -IG:/repos/lore/build/_deps/glfw-src/include -IG:/repos/lore/build/_deps/glm-src -IG:/repos/lore/build/_deps/vk-bootstrap-src/src -IG:/repos/lore/build/_deps/nlohmann_json-src/include -IG:/repos/lore/build/_deps/vulkanmemoryallocator-src/include -IG:/repos/lore/build/_deps/spirv-reflect-src/include -IG:/repos/lore/build/_deps/stb-src -IG:/repos/lore/build/_deps/miniaudio-src -c G:/repos/lore/src/audio/audio_gpu_enhancements.cpp",
+    "file": "G:/repos/lore/src/audio/audio_gpu_enhancements.cpp"
+  },
+  {
+    "directory": "G:/repos/lore",
+    "command": "clang++ -std=c++23 -Wall -Wextra -DVULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1 -DWIN32 -D_WINDOWS -DLORE_GRAPHICS_VULKAN=1 -DGLFW_INCLUDE_VULKAN -DSTB_IMAGE_IMPLEMENTATION -DMINIAUDIO_IMPLEMENTATION -DVMA_IMPLEMENTATION -DVK_USE_PLATFORM_WIN32_KHR -DNOMINMAX -DWIN32_LEAN_AND_MEAN -D_CRT_SECURE_NO_WARNINGS -IG:/repos/lore/include -IG:/repos/lore/src -IG:/repos/lore/build/include -IG:/repos/lore/build/external -IG:/repos/lore/build/_deps/glfw-src/include -IG:/repos/lore/build/_deps/glm-src -IG:/repos/lore/build/_deps/vk-bootstrap-src/src -IG:/repos/lore/build/_deps/nlohmann_json-src/include -IG:/repos/lore/build/_deps/vulkanmemoryallocator-src/include -IG:/repos/lore/build/_deps/spirv-reflect-src/include -IG:/repos/lore/build/_deps/stb-src -IG:/repos/lore/build/_deps/miniaudio-src -c G:/repos/lore/src/audio/audio_original.cpp",
+    "file": "G:/repos/lore/src/audio/audio_original.cpp"
+  },
+  {
+    "directory": "G:/repos/lore",
+    "command": "clang++ -std=c++23 -Wall -Wextra -DVULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1 -DWIN32 -D_WINDOWS -DLORE_GRAPHICS_VULKAN=1 -DGLFW_INCLUDE_VULKAN -DSTB_IMAGE_IMPLEMENTATION -DMINIAUDIO_IMPLEMENTATION -DVMA_IMPLEMENTATION -DVK_USE_PLATFORM_WIN32_KHR -DNOMINMAX -DWIN32_LEAN_AND_MEAN -D_CRT_SECURE_NO_WARNINGS -IG:/repos/lore/include -IG:/repos/lore/src -IG:/repos/lore/build/include -IG:/repos/lore/build/external -IG:/repos/lore/build/_deps/glfw-src/include -IG:/repos/lore/build/_deps/glm-src -IG:/repos/lore/build/_deps/vk-bootstrap-src/src -IG:/repos/lore/build/_deps/nlohmann_json-src/include -IG:/repos/lore/build/_deps/vulkanmemoryallocator-src/include -IG:/repos/lore/build/_deps/spirv-reflect-src/include -IG:/repos/lore/build/_deps/stb-src -IG:/repos/lore/build/_deps/miniaudio-src -c G:/repos/lore/src/audio/gpu_environmental_audio.cpp",
+    "file": "G:/repos/lore/src/audio/gpu_environmental_audio.cpp"
+  },
+  {
+    "directory": "G:/repos/lore",
+    "command": "clang++ -std=c++23 -Wall -Wextra -DVULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1 -DWIN32 -D_WINDOWS -DLORE_GRAPHICS_VULKAN=1 -DGLFW_INCLUDE_VULKAN -DSTB_IMAGE_IMPLEMENTATION -DMINIAUDIO_IMPLEMENTATION -DVMA_IMPLEMENTATION -DVK_USE_PLATFORM_WIN32_KHR -DNOMINMAX -DWIN32_LEAN_AND_MEAN -D_CRT_SECURE_NO_WARNINGS -IG:/repos/lore/include -IG:/repos/lore/src -IG:/repos/lore/build/include -IG:/repos/lore/build/external -IG:/repos/lore/build/_deps/glfw-src/include -IG:/repos/lore/build/_deps/glm-src -IG:/repos/lore/build/_deps/vk-bootstrap-src/src -IG:/repos/lore/build/_deps/nlohmann_json-src/include -IG:/repos/lore/build/_deps/vulkanmemoryallocator-src/include -IG:/repos/lore/build/_deps/spirv-reflect-src/include -IG:/repos/lore/build/_deps/stb-src -IG:/repos/lore/build/_deps/miniaudio-src -c G:/repos/lore/src/audio/gpu_environmental_error_handling.cpp",
+    "file": "G:/repos/lore/src/audio/gpu_environmental_error_handling.cpp"
+  },
+  {
+    "directory": "G:/repos/lore",
+    "command": "clang++ -std=c++23 -Wall -Wextra -DVULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1 -DWIN32 -D_WINDOWS -DLORE_GRAPHICS_VULKAN=1 -DGLFW_INCLUDE_VULKAN -DSTB_IMAGE_IMPLEMENTATION -DMINIAUDIO_IMPLEMENTATION -DVMA_IMPLEMENTATION -DVK_USE_PLATFORM_WIN32_KHR -DNOMINMAX -DWIN32_LEAN_AND_MEAN -D_CRT_SECURE_NO_WARNINGS -IG:/repos/lore/include -IG:/repos/lore/src -IG:/repos/lore/build/include -IG:/repos/lore/build/external -IG:/repos/lore/build/_deps/glfw-src/include -IG:/repos/lore/build/_deps/glm-src -IG:/repos/lore/build/_deps/vk-bootstrap-src/src -IG:/repos/lore/build/_deps/nlohmann_json-src/include -IG:/repos/lore/build/_deps/vulkanmemoryallocator-src/include -IG:/repos/lore/build/_deps/spirv-reflect-src/include -IG:/repos/lore/build/_deps/stb-src -IG:/repos/lore/build/_deps/miniaudio-src -c G:/repos/lore/src/ecs/advanced_ecs.cpp",
+    "file": "G:/repos/lore/src/ecs/advanced_ecs.cpp"
+  },
+  {
+    "directory": "G:/repos/lore",
+    "command": "clang++ -std=c++23 -Wall -Wextra -DVULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1 -DWIN32 -D_WINDOWS -DLORE_GRAPHICS_VULKAN=1 -DGLFW_INCLUDE_VULKAN -DSTB_IMAGE_IMPLEMENTATION -DMINIAUDIO_IMPLEMENTATION -DVMA_IMPLEMENTATION -DVK_USE_PLATFORM_WIN32_KHR -DNOMINMAX -DWIN32_LEAN_AND_MEAN -D_CRT_SECURE_NO_WARNINGS -IG:/repos/lore/include -IG:/repos/lore/src -IG:/repos/lore/build/include -IG:/repos/lore/build/external -IG:/repos/lore/build/_deps/glfw-src/include -IG:/repos/lore/build/_deps/glm-src -IG:/repos/lore/build/_deps/vk-bootstrap-src/src -IG:/repos/lore/build/_deps/nlohmann_json-src/include -IG:/repos/lore/build/_deps/vulkanmemoryallocator-src/include -IG:/repos/lore/build/_deps/spirv-reflect-src/include -IG:/repos/lore/build/_deps/stb-src -IG:/repos/lore/build/_deps/miniaudio-src -c G:/repos/lore/src/ecs/component_tracking.cpp",
+    "file": "G:/repos/lore/src/ecs/component_tracking.cpp"
+  },
+  {
+    "directory": "G:/repos/lore",
+    "command": "clang++ -std=c++23 -Wall -Wextra -DVULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1 -DWIN32 -D_WINDOWS -DLORE_GRAPHICS_VULKAN=1 -DGLFW_INCLUDE_VULKAN -DSTB_IMAGE_IMPLEMENTATION -DMINIAUDIO_IMPLEMENTATION -DVMA_IMPLEMENTATION -DVK_USE_PLATFORM_WIN32_KHR -DNOMINMAX -DWIN32_LEAN_AND_MEAN -D_CRT_SECURE_NO_WARNINGS -IG:/repos/lore/include -IG:/repos/lore/src -IG:/repos/lore/build/include -IG:/repos/lore/build/external -IG:/repos/lore/build/_deps/glfw-src/include -IG:/repos/lore/build/_deps/glm-src -IG:/repos/lore/build/_deps/vk-bootstrap-src/src -IG:/repos/lore/build/_deps/nlohmann_json-src/include -IG:/repos/lore/build/_deps/vulkanmemoryallocator-src/include -IG:/repos/lore/build/_deps/spirv-reflect-src/include -IG:/repos/lore/build/_deps/stb-src -IG:/repos/lore/build/_deps/miniaudio-src -c G:/repos/lore/src/ecs/ecs.cpp",
+    "file": "G:/repos/lore/src/ecs/ecs.cpp"
+  },
+  {
+    "directory": "G:/repos/lore",
+    "command": "clang++ -std=c++23 -Wall -Wextra -DVULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1 -DWIN32 -D_WINDOWS -DLORE_GRAPHICS_VULKAN=1 -DGLFW_INCLUDE_VULKAN -DSTB_IMAGE_IMPLEMENTATION -DMINIAUDIO_IMPLEMENTATION -DVMA_IMPLEMENTATION -DVK_USE_PLATFORM_WIN32_KHR -DNOMINMAX -DWIN32_LEAN_AND_MEAN -D_CRT_SECURE_NO_WARNINGS -IG:/repos/lore/include -IG:/repos/lore/src -IG:/repos/lore/build/include -IG:/repos/lore/build/external -IG:/repos/lore/build/_deps/glfw-src/include -IG:/repos/lore/build/_deps/glm-src -IG:/repos/lore/build/_deps/vk-bootstrap-src/src -IG:/repos/lore/build/_deps/nlohmann_json-src/include -IG:/repos/lore/build/_deps/vulkanmemoryallocator-src/include -IG:/repos/lore/build/_deps/spirv-reflect-src/include -IG:/repos/lore/build/_deps/stb-src -IG:/repos/lore/build/_deps/miniaudio-src -c G:/repos/lore/src/ecs/entity_manager.cpp",
+    "file": "G:/repos/lore/src/ecs/entity_manager.cpp"
+  },
+  {
+    "directory": "G:/repos/lore",
+    "command": "clang++ -std=c++23 -Wall -Wextra -DVULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1 -DWIN32 -D_WINDOWS -DLORE_GRAPHICS_VULKAN=1 -DGLFW_INCLUDE_VULKAN -DSTB_IMAGE_IMPLEMENTATION -DMINIAUDIO_IMPLEMENTATION -DVMA_IMPLEMENTATION -DVK_USE_PLATFORM_WIN32_KHR -DNOMINMAX -DWIN32_LEAN_AND_MEAN -D_CRT_SECURE_NO_WARNINGS -IG:/repos/lore/include -IG:/repos/lore/src -IG:/repos/lore/build/include -IG:/repos/lore/build/external -IG:/repos/lore/build/_deps/glfw-src/include -IG:/repos/lore/build/_deps/glm-src -IG:/repos/lore/build/_deps/vk-bootstrap-src/src -IG:/repos/lore/build/_deps/nlohmann_json-src/include -IG:/repos/lore/build/_deps/vulkanmemoryallocator-src/include -IG:/repos/lore/build/_deps/spirv-reflect-src/include -IG:/repos/lore/build/_deps/stb-src -IG:/repos/lore/build/_deps/miniaudio-src -c G:/repos/lore/src/ecs/serialization.cpp",
+    "file": "G:/repos/lore/src/ecs/serialization.cpp"
+  },
+  {
+    "directory": "G:/repos/lore",
+    "command": "clang++ -std=c++23 -Wall -Wextra -DVULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1 -DWIN32 -D_WINDOWS -DLORE_GRAPHICS_VULKAN=1 -DGLFW_INCLUDE_VULKAN -DSTB_IMAGE_IMPLEMENTATION -DMINIAUDIO_IMPLEMENTATION -DVMA_IMPLEMENTATION -DVK_USE_PLATFORM_WIN32_KHR -DNOMINMAX -DWIN32_LEAN_AND_MEAN -D_CRT_SECURE_NO_WARNINGS -IG:/repos/lore/include -IG:/repos/lore/src -IG:/repos/lore/build/include -IG:/repos/lore/build/external -IG:/repos/lore/build/_deps/glfw-src/include -IG:/repos/lore/build/_deps/glm-src -IG:/repos/lore/build/_deps/vk-bootstrap-src/src -IG:/repos/lore/build/_deps/nlohmann_json-src/include -IG:/repos/lore/build/_deps/vulkanmemoryallocator-src/include -IG:/repos/lore/build/_deps/spirv-reflect-src/include -IG:/repos/lore/build/_deps/stb-src -IG:/repos/lore/build/_deps/miniaudio-src -c G:/repos/lore/src/ecs/world_manager.cpp",
+    "file": "G:/repos/lore/src/ecs/world_manager.cpp"
+  },
+  {
+    "directory": "G:/repos/lore",
+    "command": "clang++ -std=c++23 -Wall -Wextra -DVULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1 -DWIN32 -D_WINDOWS -DLORE_GRAPHICS_VULKAN=1 -DGLFW_INCLUDE_VULKAN -DSTB_IMAGE_IMPLEMENTATION -DMINIAUDIO_IMPLEMENTATION -DVMA_IMPLEMENTATION -DVK_USE_PLATFORM_WIN32_KHR -DNOMINMAX -DWIN32_LEAN_AND_MEAN -D_CRT_SECURE_NO_WARNINGS -IG:/repos/lore/include -IG:/repos/lore/src -IG:/repos/lore/build/include -IG:/repos/lore/build/external -IG:/repos/lore/build/_deps/glfw-src/include -IG:/repos/lore/build/_deps/glm-src -IG:/repos/lore/build/_deps/vk-bootstrap-src/src -IG:/repos/lore/build/_deps/nlohmann_json-src/include -IG:/repos/lore/build/_deps/vulkanmemoryallocator-src/include -IG:/repos/lore/build/_deps/spirv-reflect-src/include -IG:/repos/lore/build/_deps/stb-src -IG:/repos/lore/build/_deps/miniaudio-src -c G:/repos/lore/src/gpu_compute_demo.cpp",
+    "file": "G:/repos/lore/src/gpu_compute_demo.cpp"
+  },
+  {
+    "directory": "G:/repos/lore",
+    "command": "clang++ -std=c++23 -Wall -Wextra -DVULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1 -DWIN32 -D_WINDOWS -DLORE_GRAPHICS_VULKAN=1 -DGLFW_INCLUDE_VULKAN -DSTB_IMAGE_IMPLEMENTATION -DMINIAUDIO_IMPLEMENTATION -DVMA_IMPLEMENTATION -DVK_USE_PLATFORM_WIN32_KHR -DNOMINMAX -DWIN32_LEAN_AND_MEAN -D_CRT_SECURE_NO_WARNINGS -IG:/repos/lore/include -IG:/repos/lore/src -IG:/repos/lore/build/include -IG:/repos/lore/build/external -IG:/repos/lore/build/_deps/glfw-src/include -IG:/repos/lore/build/_deps/glm-src -IG:/repos/lore/build/_deps/vk-bootstrap-src/src -IG:/repos/lore/build/_deps/nlohmann_json-src/include -IG:/repos/lore/build/_deps/vulkanmemoryallocator-src/include -IG:/repos/lore/build/_deps/spirv-reflect-src/include -IG:/repos/lore/build/_deps/stb-src -IG:/repos/lore/build/_deps/miniaudio-src -c G:/repos/lore/src/graphics/gpu_compute.cpp",
+    "file": "G:/repos/lore/src/graphics/gpu_compute.cpp"
+  },
+  {
+    "directory": "G:/repos/lore",
+    "command": "clang++ -std=c++23 -Wall -Wextra -DVULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1 -DWIN32 -D_WINDOWS -DLORE_GRAPHICS_VULKAN=1 -DGLFW_INCLUDE_VULKAN -DSTB_IMAGE_IMPLEMENTATION -DMINIAUDIO_IMPLEMENTATION -DVMA_IMPLEMENTATION -DVK_USE_PLATFORM_WIN32_KHR -DNOMINMAX -DWIN32_LEAN_AND_MEAN -D_CRT_SECURE_NO_WARNINGS -IG:/repos/lore/include -IG:/repos/lore/src -IG:/repos/lore/build/include -IG:/repos/lore/build/external -IG:/repos/lore/build/_deps/glfw-src/include -IG:/repos/lore/build/_deps/glm-src -IG:/repos/lore/build/_deps/vk-bootstrap-src/src -IG:/repos/lore/build/_deps/nlohmann_json-src/include -IG:/repos/lore/build/_deps/vulkanmemoryallocator-src/include -IG:/repos/lore/build/_deps/spirv-reflect-src/include -IG:/repos/lore/build/_deps/stb-src -IG:/repos/lore/build/_deps/miniaudio-src -c G:/repos/lore/src/graphics/graphics.cpp",
+    "file": "G:/repos/lore/src/graphics/graphics.cpp"
+  },
+  {
+    "directory": "G:/repos/lore",
+    "command": "clang++ -std=c++23 -Wall -Wextra -DVULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1 -DWIN32 -D_WINDOWS -DLORE_GRAPHICS_VULKAN=1 -DGLFW_INCLUDE_VULKAN -DSTB_IMAGE_IMPLEMENTATION -DMINIAUDIO_IMPLEMENTATION -DVMA_IMPLEMENTATION -DVK_USE_PLATFORM_WIN32_KHR -DNOMINMAX -DWIN32_LEAN_AND_MEAN -D_CRT_SECURE_NO_WARNINGS -IG:/repos/lore/include -IG:/repos/lore/src -IG:/repos/lore/build/include -IG:/repos/lore/build/external -IG:/repos/lore/build/_deps/glfw-src/include -IG:/repos/lore/build/_deps/glm-src -IG:/repos/lore/build/_deps/vk-bootstrap-src/src -IG:/repos/lore/build/_deps/nlohmann_json-src/include -IG:/repos/lore/build/_deps/vulkanmemoryallocator-src/include -IG:/repos/lore/build/_deps/spirv-reflect-src/include -IG:/repos/lore/build/_deps/stb-src -IG:/repos/lore/build/_deps/miniaudio-src -c G:/repos/lore/src/graphics/vma_implementation.cpp",
+    "file": "G:/repos/lore/src/graphics/vma_implementation.cpp"
+  },
+  {
+    "directory": "G:/repos/lore",
+    "command": "clang++ -std=c++23 -Wall -Wextra -DVULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1 -DWIN32 -D_WINDOWS -DLORE_GRAPHICS_VULKAN=1 -DGLFW_INCLUDE_VULKAN -DSTB_IMAGE_IMPLEMENTATION -DMINIAUDIO_IMPLEMENTATION -DVMA_IMPLEMENTATION -DVK_USE_PLATFORM_WIN32_KHR -DNOMINMAX -DWIN32_LEAN_AND_MEAN -D_CRT_SECURE_NO_WARNINGS -IG:/repos/lore/include -IG:/repos/lore/src -IG:/repos/lore/build/include -IG:/repos/lore/build/external -IG:/repos/lore/build/_deps/glfw-src/include -IG:/repos/lore/build/_deps/glm-src -IG:/repos/lore/build/_deps/vk-bootstrap-src/src -IG:/repos/lore/build/_deps/nlohmann_json-src/include -IG:/repos/lore/build/_deps/vulkanmemoryallocator-src/include -IG:/repos/lore/build/_deps/spirv-reflect-src/include -IG:/repos/lore/build/_deps/stb-src -IG:/repos/lore/build/_deps/miniaudio-src -c G:/repos/lore/src/input/event_system.cpp",
+    "file": "G:/repos/lore/src/input/event_system.cpp"
+  },
+  {
+    "directory": "G:/repos/lore",
+    "command": "clang++ -std=c++23 -Wall -Wextra -DVULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1 -DWIN32 -D_WINDOWS -DLORE_GRAPHICS_VULKAN=1 -DGLFW_INCLUDE_VULKAN -DSTB_IMAGE_IMPLEMENTATION -DMINIAUDIO_IMPLEMENTATION -DVMA_IMPLEMENTATION -DVK_USE_PLATFORM_WIN32_KHR -DNOMINMAX -DWIN32_LEAN_AND_MEAN -D_CRT_SECURE_NO_WARNINGS -IG:/repos/lore/include -IG:/repos/lore/src -IG:/repos/lore/build/include -IG:/repos/lore/build/external -IG:/repos/lore/build/_deps/glfw-src/include -IG:/repos/lore/build/_deps/glm-src -IG:/repos/lore/build/_deps/vk-bootstrap-src/src -IG:/repos/lore/build/_deps/nlohmann_json-src/include -IG:/repos/lore/build/_deps/vulkanmemoryallocator-src/include -IG:/repos/lore/build/_deps/spirv-reflect-src/include -IG:/repos/lore/build/_deps/stb-src -IG:/repos/lore/build/_deps/miniaudio-src -c G:/repos/lore/src/input/glfw_input_handler.cpp",
+    "file": "G:/repos/lore/src/input/glfw_input_handler.cpp"
+  },
+  {
+    "directory": "G:/repos/lore",
+    "command": "clang++ -std=c++23 -Wall -Wextra -DVULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1 -DWIN32 -D_WINDOWS -DLORE_GRAPHICS_VULKAN=1 -DGLFW_INCLUDE_VULKAN -DSTB_IMAGE_IMPLEMENTATION -DMINIAUDIO_IMPLEMENTATION -DVMA_IMPLEMENTATION -DVK_USE_PLATFORM_WIN32_KHR -DNOMINMAX -DWIN32_LEAN_AND_MEAN -D_CRT_SECURE_NO_WARNINGS -IG:/repos/lore/include -IG:/repos/lore/src -IG:/repos/lore/build/include -IG:/repos/lore/build/external -IG:/repos/lore/build/_deps/glfw-src/include -IG:/repos/lore/build/_deps/glm-src -IG:/repos/lore/build/_deps/vk-bootstrap-src/src -IG:/repos/lore/build/_deps/nlohmann_json-src/include -IG:/repos/lore/build/_deps/vulkanmemoryallocator-src/include -IG:/repos/lore/build/_deps/spirv-reflect-src/include -IG:/repos/lore/build/_deps/stb-src -IG:/repos/lore/build/_deps/miniaudio-src -c G:/repos/lore/src/input/input.cpp",
+    "file": "G:/repos/lore/src/input/input.cpp"
+  },
+  {
+    "directory": "G:/repos/lore",
+    "command": "clang++ -std=c++23 -Wall -Wextra -DVULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1 -DWIN32 -D_WINDOWS -DLORE_GRAPHICS_VULKAN=1 -DGLFW_INCLUDE_VULKAN -DSTB_IMAGE_IMPLEMENTATION -DMINIAUDIO_IMPLEMENTATION -DVMA_IMPLEMENTATION -DVK_USE_PLATFORM_WIN32_KHR -DNOMINMAX -DWIN32_LEAN_AND_MEAN -D_CRT_SECURE_NO_WARNINGS -IG:/repos/lore/include -IG:/repos/lore/src -IG:/repos/lore/build/include -IG:/repos/lore/build/external -IG:/repos/lore/build/_deps/glfw-src/include -IG:/repos/lore/build/_deps/glm-src -IG:/repos/lore/build/_deps/vk-bootstrap-src/src -IG:/repos/lore/build/_deps/nlohmann_json-src/include -IG:/repos/lore/build/_deps/vulkanmemoryallocator-src/include -IG:/repos/lore/build/_deps/spirv-reflect-src/include -IG:/repos/lore/build/_deps/stb-src -IG:/repos/lore/build/_deps/miniaudio-src -c G:/repos/lore/src/input/input_debug.cpp",
+    "file": "G:/repos/lore/src/input/input_debug.cpp"
+  },
+  {
+    "directory": "G:/repos/lore",
+    "command": "clang++ -std=c++23 -Wall -Wextra -DVULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1 -DWIN32 -D_WINDOWS -DLORE_GRAPHICS_VULKAN=1 -DGLFW_INCLUDE_VULKAN -DSTB_IMAGE_IMPLEMENTATION -DMINIAUDIO_IMPLEMENTATION -DVMA_IMPLEMENTATION -DVK_USE_PLATFORM_WIN32_KHR -DNOMINMAX -DWIN32_LEAN_AND_MEAN -D_CRT_SECURE_NO_WARNINGS -IG:/repos/lore/include -IG:/repos/lore/src -IG:/repos/lore/build/include -IG:/repos/lore/build/external -IG:/repos/lore/build/_deps/glfw-src/include -IG:/repos/lore/build/_deps/glm-src -IG:/repos/lore/build/_deps/vk-bootstrap-src/src -IG:/repos/lore/build/_deps/nlohmann_json-src/include -IG:/repos/lore/build/_deps/vulkanmemoryallocator-src/include -IG:/repos/lore/build/_deps/spirv-reflect-src/include -IG:/repos/lore/build/_deps/stb-src -IG:/repos/lore/build/_deps/miniaudio-src -c G:/repos/lore/src/input/input_ecs.cpp",
+    "file": "G:/repos/lore/src/input/input_ecs.cpp"
+  },
+  {
+    "directory": "G:/repos/lore",
+    "command": "clang++ -std=c++23 -Wall -Wextra -DVULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1 -DWIN32 -D_WINDOWS -DLORE_GRAPHICS_VULKAN=1 -DGLFW_INCLUDE_VULKAN -DSTB_IMAGE_IMPLEMENTATION -DMINIAUDIO_IMPLEMENTATION -DVMA_IMPLEMENTATION -DVK_USE_PLATFORM_WIN32_KHR -DNOMINMAX -DWIN32_LEAN_AND_MEAN -D_CRT_SECURE_NO_WARNINGS -IG:/repos/lore/include -IG:/repos/lore/src -IG:/repos/lore/build/include -IG:/repos/lore/build/external -IG:/repos/lore/build/_deps/glfw-src/include -IG:/repos/lore/build/_deps/glm-src -IG:/repos/lore/build/_deps/vk-bootstrap-src/src -IG:/repos/lore/build/_deps/nlohmann_json-src/include -IG:/repos/lore/build/_deps/vulkanmemoryallocator-src/include -IG:/repos/lore/build/_deps/spirv-reflect-src/include -IG:/repos/lore/build/_deps/stb-src -IG:/repos/lore/build/_deps/miniaudio-src -c G:/repos/lore/src/input/input_events.cpp",
+    "file": "G:/repos/lore/src/input/input_events.cpp"
+  },
+  {
+    "directory": "G:/repos/lore",
+    "command": "clang++ -std=c++23 -Wall -Wextra -DVULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1 -DWIN32 -D_WINDOWS -DLORE_GRAPHICS_VULKAN=1 -DGLFW_INCLUDE_VULKAN -DSTB_IMAGE_IMPLEMENTATION -DMINIAUDIO_IMPLEMENTATION -DVMA_IMPLEMENTATION -DVK_USE_PLATFORM_WIN32_KHR -DNOMINMAX -DWIN32_LEAN_AND_MEAN -D_CRT_SECURE_NO_WARNINGS -IG:/repos/lore/include -IG:/repos/lore/src -IG:/repos/lore/build/include -IG:/repos/lore/build/external -IG:/repos/lore/build/_deps/glfw-src/include -IG:/repos/lore/build/_deps/glm-src -IG:/repos/lore/build/_deps/vk-bootstrap-src/src -IG:/repos/lore/build/_deps/nlohmann_json-src/include -IG:/repos/lore/build/_deps/vulkanmemoryallocator-src/include -IG:/repos/lore/build/_deps/spirv-reflect-src/include -IG:/repos/lore/build/_deps/stb-src -IG:/repos/lore/build/_deps/miniaudio-src -c G:/repos/lore/src/input/input_listener_manager.cpp",
+    "file": "G:/repos/lore/src/input/input_listener_manager.cpp"
+  },
+  {
+    "directory": "G:/repos/lore",
+    "command": "clang++ -std=c++23 -Wall -Wextra -DVULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1 -DWIN32 -D_WINDOWS -DLORE_GRAPHICS_VULKAN=1 -DGLFW_INCLUDE_VULKAN -DSTB_IMAGE_IMPLEMENTATION -DMINIAUDIO_IMPLEMENTATION -DVMA_IMPLEMENTATION -DVK_USE_PLATFORM_WIN32_KHR -DNOMINMAX -DWIN32_LEAN_AND_MEAN -D_CRT_SECURE_NO_WARNINGS -IG:/repos/lore/include -IG:/repos/lore/src -IG:/repos/lore/build/include -IG:/repos/lore/build/external -IG:/repos/lore/build/_deps/glfw-src/include -IG:/repos/lore/build/_deps/glm-src -IG:/repos/lore/build/_deps/vk-bootstrap-src/src -IG:/repos/lore/build/_deps/nlohmann_json-src/include -IG:/repos/lore/build/_deps/vulkanmemoryallocator-src/include -IG:/repos/lore/build/_deps/spirv-reflect-src/include -IG:/repos/lore/build/_deps/stb-src -IG:/repos/lore/build/_deps/miniaudio-src -c G:/repos/lore/src/input/tests/input_system_tests.cpp",
+    "file": "G:/repos/lore/src/input/tests/input_system_tests.cpp"
+  },
+  {
+    "directory": "G:/repos/lore",
+    "command": "clang++ -std=c++23 -Wall -Wextra -DVULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1 -DWIN32 -D_WINDOWS -DLORE_GRAPHICS_VULKAN=1 -DGLFW_INCLUDE_VULKAN -DSTB_IMAGE_IMPLEMENTATION -DMINIAUDIO_IMPLEMENTATION -DVMA_IMPLEMENTATION -DVK_USE_PLATFORM_WIN32_KHR -DNOMINMAX -DWIN32_LEAN_AND_MEAN -D_CRT_SECURE_NO_WARNINGS -IG:/repos/lore/include -IG:/repos/lore/src -IG:/repos/lore/build/include -IG:/repos/lore/build/external -IG:/repos/lore/build/_deps/glfw-src/include -IG:/repos/lore/build/_deps/glm-src -IG:/repos/lore/build/_deps/vk-bootstrap-src/src -IG:/repos/lore/build/_deps/nlohmann_json-src/include -IG:/repos/lore/build/_deps/vulkanmemoryallocator-src/include -IG:/repos/lore/build/_deps/spirv-reflect-src/include -IG:/repos/lore/build/_deps/stb-src -IG:/repos/lore/build/_deps/miniaudio-src -c G:/repos/lore/src/main.cpp",
+    "file": "G:/repos/lore/src/main.cpp"
+  },
+  {
+    "directory": "G:/repos/lore",
+    "command": "clang++ -std=c++23 -Wall -Wextra -DVULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1 -DWIN32 -D_WINDOWS -DLORE_GRAPHICS_VULKAN=1 -DGLFW_INCLUDE_VULKAN -DSTB_IMAGE_IMPLEMENTATION -DMINIAUDIO_IMPLEMENTATION -DVMA_IMPLEMENTATION -DVK_USE_PLATFORM_WIN32_KHR -DNOMINMAX -DWIN32_LEAN_AND_MEAN -D_CRT_SECURE_NO_WARNINGS -IG:/repos/lore/include -IG:/repos/lore/src -IG:/repos/lore/build/include -IG:/repos/lore/build/external -IG:/repos/lore/build/_deps/glfw-src/include -IG:/repos/lore/build/_deps/glm-src -IG:/repos/lore/build/_deps/vk-bootstrap-src/src -IG:/repos/lore/build/_deps/nlohmann_json-src/include -IG:/repos/lore/build/_deps/vulkanmemoryallocator-src/include -IG:/repos/lore/build/_deps/spirv-reflect-src/include -IG:/repos/lore/build/_deps/stb-src -IG:/repos/lore/build/_deps/miniaudio-src -c G:/repos/lore/src/math/math.cpp",
+    "file": "G:/repos/lore/src/math/math.cpp"
+  },
+  {
+    "directory": "G:/repos/lore",
+    "command": "clang++ -std=c++23 -Wall -Wextra -DVULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1 -DWIN32 -D_WINDOWS -DLORE_GRAPHICS_VULKAN=1 -DGLFW_INCLUDE_VULKAN -DSTB_IMAGE_IMPLEMENTATION -DMINIAUDIO_IMPLEMENTATION -DVMA_IMPLEMENTATION -DVK_USE_PLATFORM_WIN32_KHR -DNOMINMAX -DWIN32_LEAN_AND_MEAN -D_CRT_SECURE_NO_WARNINGS -IG:/repos/lore/include -IG:/repos/lore/src -IG:/repos/lore/build/include -IG:/repos/lore/build/external -IG:/repos/lore/build/_deps/glfw-src/include -IG:/repos/lore/build/_deps/glm-src -IG:/repos/lore/build/_deps/vk-bootstrap-src/src -IG:/repos/lore/build/_deps/nlohmann_json-src/include -IG:/repos/lore/build/_deps/vulkanmemoryallocator-src/include -IG:/repos/lore/build/_deps/spirv-reflect-src/include -IG:/repos/lore/build/_deps/stb-src -IG:/repos/lore/build/_deps/miniaudio-src -c G:/repos/lore/src/physics/physics.cpp",
+    "file": "G:/repos/lore/src/physics/physics.cpp"
+  },
+  {
+    "directory": "G:/repos/lore",
+    "command": "clang++ -std=c++23 -Wall -Wextra -DVULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1 -DWIN32 -D_WINDOWS -DLORE_GRAPHICS_VULKAN=1 -DGLFW_INCLUDE_VULKAN -DSTB_IMAGE_IMPLEMENTATION -DMINIAUDIO_IMPLEMENTATION -DVMA_IMPLEMENTATION -DVK_USE_PLATFORM_WIN32_KHR -DNOMINMAX -DWIN32_LEAN_AND_MEAN -D_CRT_SECURE_NO_WARNINGS -IG:/repos/lore/include -IG:/repos/lore/src -IG:/repos/lore/build/include -IG:/repos/lore/build/external -IG:/repos/lore/build/_deps/glfw-src/include -IG:/repos/lore/build/_deps/glm-src -IG:/repos/lore/build/_deps/vk-bootstrap-src/src -IG:/repos/lore/build/_deps/nlohmann_json-src/include -IG:/repos/lore/build/_deps/vulkanmemoryallocator-src/include -IG:/repos/lore/build/_deps/spirv-reflect-src/include -IG:/repos/lore/build/_deps/stb-src -IG:/repos/lore/build/_deps/miniaudio-src -c G:/repos/lore/src/test_gpu_compute.cpp",
+    "file": "G:/repos/lore/src/test_gpu_compute.cpp"
+  }
+]

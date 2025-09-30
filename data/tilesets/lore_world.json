@@ -1,0 +1,207 @@
+{
+  "name": "lore_world",
+  "type": "tileset",
+  "tilewidth": 32,
+  "tileheight": 32,
+  "tilecount": 32,
+  "columns": 8,
+  "spacing": 0,
+  "margin": 0,
+  "image": "lore_world.png",
+  "imagewidth": 256,
+  "imageheight": 128,
+  "tiles": [
+    {
+      "id": 0,
+      "type": "floor",
+      "properties": [
+        {"name": "mesh_path", "type": "string", "value": "meshes/floors/concrete_floor.obj"},
+        {"name": "height", "type": "int", "value": 1},
+        {"name": "collision_type", "type": "string", "value": "box"},
+        {"name": "material_id", "type": "int", "value": 0},
+        {"name": "walkable", "type": "bool", "value": true},
+        {"name": "blocks_sight", "type": "bool", "value": false}
+      ]
+    },
+    {
+      "id": 1,
+      "type": "floor_metal",
+      "properties": [
+        {"name": "mesh_path", "type": "string", "value": "meshes/floors/metal_floor.obj"},
+        {"name": "height", "type": "int", "value": 1},
+        {"name": "collision_type", "type": "string", "value": "box"},
+        {"name": "material_id", "type": "int", "value": 1},
+        {"name": "walkable", "type": "bool", "value": true},
+        {"name": "blocks_sight", "type": "bool", "value": false}
+      ]
+    },
+    {
+      "id": 2,
+      "type": "wall_1m",
+      "properties": [
+        {"name": "mesh_path", "type": "string", "value": "meshes/walls/wall_1m.obj"},
+        {"name": "height", "type": "int", "value": 1},
+        {"name": "collision_type", "type": "string", "value": "box"},
+        {"name": "material_id", "type": "int", "value": 2},
+        {"name": "walkable", "type": "bool", "value": false},
+        {"name": "blocks_sight", "type": "bool", "value": true}
+      ]
+    },
+    {
+      "id": 3,
+      "type": "wall_2m",
+      "properties": [
+        {"name": "mesh_path", "type": "string", "value": "meshes/walls/wall_2m.obj"},
+        {"name": "height", "type": "int", "value": 2},
+        {"name": "collision_type", "type": "string", "value": "box"},
+        {"name": "material_id", "type": "int", "value": 2},
+        {"name": "walkable", "type": "bool", "value": false},
+        {"name": "blocks_sight", "type": "bool", "value": true}
+      ]
+    },
+    {
+      "id": 4,
+      "type": "wall_3m",
+      "properties": [
+        {"name": "mesh_path", "type": "string", "value": "meshes/walls/wall_3m.obj"},
+        {"name": "height", "type": "int", "value": 3},
+        {"name": "collision_type", "type": "string", "value": "box"},
+        {"name": "material_id", "type": "int", "value": 2},
+        {"name": "walkable", "type": "bool", "value": false},
+        {"name": "blocks_sight", "type": "bool", "value": true}
+      ]
+    },
+    {
+      "id": 5,
+      "type": "wall_4m",
+      "properties": [
+        {"name": "mesh_path", "type": "string", "value": "meshes/walls/wall_4m.obj"},
+        {"name": "height", "type": "int", "value": 4},
+        {"name": "collision_type", "type": "string", "value": "box"},
+        {"name": "material_id", "type": "int", "value": 2},
+        {"name": "walkable", "type": "bool", "value": false},
+        {"name": "blocks_sight", "type": "bool", "value": true}
+      ]
+    },
+    {
+      "id": 6,
+      "type": "door_standard",
+      "properties": [
+        {"name": "mesh_path", "type": "string", "value": "meshes/furniture/door_standard.obj"},
+        {"name": "height", "type": "int", "value": 2},
+        {"name": "collision_type", "type": "string", "value": "box"},
+        {"name": "material_id", "type": "int", "value": 3},
+        {"name": "walkable", "type": "bool", "value": true},
+        {"name": "blocks_sight", "type": "bool", "value": false}
+      ]
+    },
+    {
+      "id": 7,
+      "type": "door_lab",
+      "properties": [
+        {"name": "mesh_path", "type": "string", "value": "meshes/furniture/door_lab.obj"},
+        {"name": "height", "type": "int", "value": 2},
+        {"name": "collision_type", "type": "string", "value": "box"},
+        {"name": "material_id", "type": "int", "value": 4},
+        {"name": "walkable", "type": "bool", "value": true},
+        {"name": "blocks_sight", "type": "bool", "value": false}
+      ]
+    },
+    {
+      "id": 8,
+      "type": "bench_lab",
+      "properties": [
+        {"name": "mesh_path", "type": "string", "value": "meshes/furniture/lab_bench.obj"},
+        {"name": "height", "type": "int", "value": 1},
+        {"name": "collision_type", "type": "string", "value": "box"},
+        {"name": "material_id", "type": "int", "value": 5},
+        {"name": "walkable", "type": "bool", "value": false},
+        {"name": "blocks_sight", "type": "bool", "value": false}
+      ]
+    },
+    {
+      "id": 9,
+      "type": "computer_desk",
+      "properties": [
+        {"name": "mesh_path", "type": "string", "value": "meshes/furniture/computer_desk.obj"},
+        {"name": "height", "type": "int", "value": 1},
+        {"name": "collision_type", "type": "string", "value": "box"},
+        {"name": "material_id", "type": "int", "value": 5},
+        {"name": "walkable", "type": "bool", "value": false},
+        {"name": "blocks_sight", "type": "bool", "value": false}
+      ]
+    },
+    {
+      "id": 10,
+      "type": "shelf_metal",
+      "properties": [
+        {"name": "mesh_path", "type": "string", "value": "meshes/furniture/shelf_metal.obj"},
+        {"name": "height", "type": "int", "value": 2},
+        {"name": "collision_type", "type": "string", "value": "box"},
+        {"name": "material_id", "type": "int", "value": 1},
+        {"name": "walkable", "type": "bool", "value": false},
+        {"name": "blocks_sight", "type": "bool", "value": true}
+      ]
+    },
+    {
+      "id": 11,
+      "type": "crate_small",
+      "properties": [
+        {"name": "mesh_path", "type": "string", "value": "meshes/props/crate_small.obj"},
+        {"name": "height", "type": "int", "value": 1},
+        {"name": "collision_type", "type": "string", "value": "box"},
+        {"name": "material_id", "type": "int", "value": 6},
+        {"name": "walkable", "type": "bool", "value": false},
+        {"name": "blocks_sight", "type": "bool", "value": false}
+      ]
+    },
+    {
+      "id": 12,
+      "type": "crate_large",
+      "properties": [
+        {"name": "mesh_path", "type": "string", "value": "meshes/props/crate_large.obj"},
+        {"name": "height", "type": "int", "value": 2},
+        {"name": "collision_type", "type": "string", "value": "box"},
+        {"name": "material_id", "type": "int", "value": 6},
+        {"name": "walkable", "type": "bool", "value": false},
+        {"name": "blocks_sight", "type": "bool", "value": true}
+      ]
+    },
+    {
+      "id": 13,
+      "type": "terminal",
+      "properties": [
+        {"name": "mesh_path", "type": "string", "value": "meshes/props/terminal.obj"},
+        {"name": "height", "type": "int", "value": 1},
+        {"name": "collision_type", "type": "string", "value": "box"},
+        {"name": "material_id", "type": "int", "value": 7},
+        {"name": "walkable", "type": "bool", "value": false},
+        {"name": "blocks_sight", "type": "bool", "value": false}
+      ]
+    },
+    {
+      "id": 14,
+      "type": "window_1m",
+      "properties": [
+        {"name": "mesh_path", "type": "string", "value": "meshes/walls/window_1m.obj"},
+        {"name": "height", "type": "int", "value": 1},
+        {"name": "collision_type", "type": "string", "value": "box"},
+        {"name": "material_id", "type": "int", "value": 8},
+        {"name": "walkable", "type": "bool", "value": false},
+        {"name": "blocks_sight", "type": "bool", "value": false}
+      ]
+    },
+    {
+      "id": 15,
+      "type": "window_2m",
+      "properties": [
+        {"name": "mesh_path", "type": "string", "value": "meshes/walls/window_2m.obj"},
+        {"name": "height", "type": "int", "value": 2},
+        {"name": "collision_type", "type": "string", "value": "box"},
+        {"name": "material_id", "type": "int", "value": 8},
+        {"name": "walkable", "type": "bool", "value": false},
+        {"name": "blocks_sight", "type": "bool", "value": false}
+      ]
+    }
+  ]
+}
