@@ -2,6 +2,7 @@
 
 #include <lore/math/math.hpp>
 #include <lore/vision/vision_world_interface.hpp>
+#include <lore/world/tile_mesh_cache.hpp>
 #include <string>
 #include <vector>
 #include <map>
@@ -53,6 +54,7 @@ struct TileDefinition {
     uint32_t id;                        // Unique definition ID
     std::string name;                   // Human-readable name (e.g., "stone_wall_3m")
     std::string mesh_path;              // Path to 3D mesh (e.g., "meshes/wall_stone.obj")
+    uint32_t cached_mesh_id = 0;        // TileMeshCache mesh ID (0 = not loaded)
 
     // Physical properties
     float height_meters = 1.0f;         // Physical height in meters
@@ -82,9 +84,12 @@ struct TileInstance {
     TileCoord coord;                    // Position in tile grid
     float rotation_degrees = 0.0f;      // Rotation around Z-axis (0, 90, 180, 270)
 
+    // Destruction state
+    TileState state = TileState::Pristine; // Current destruction state
+    float health = 1.0f;                // Normalized health (1.0 = undamaged, 0.0 = destroyed)
+
     // Runtime state
     bool is_active = true;              // If false, tile is hidden/disabled
-    float health = 1.0f;                // Normalized health (1.0 = undamaged, 0.0 = destroyed)
 
     // Per-instance overrides (optional)
     std::unique_ptr<math::Vec3> custom_tint; // Override TileDefinition tint_color
