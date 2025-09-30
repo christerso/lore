@@ -79,6 +79,30 @@ _deps/
 _cpm_packages/
 _cpmsources/
 
+# Third-Party Libraries (keep source, ignore builds)
+# NOTE: Third-party source code is tracked, but build artifacts are not
+third_party/**/build/
+third_party/**/bin/
+third_party/**/lib/
+third_party/**/*.lib
+third_party/**/*.a
+third_party/**/*.so
+third_party/**/*.dylib
+third_party/**/*.dll
+third_party/**/*.obj
+third_party/**/*.o
+third_party/**/CMakeFiles/
+third_party/**/CMakeCache.txt
+third_party/**/.vs/
+third_party/**/.vscode/
+
+# External Pre-built Libraries
+# NOTE: Keep headers, ignore pre-built binaries (download once, use forever)
+external/**/lib/*.lib
+external/**/lib/*.a
+external/**/bin/*.dll
+external/**/bin/*.so
+
 # Local Configuration
 .env
 .env.local
