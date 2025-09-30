@@ -2,11 +2,15 @@
 # This file coordinates the building of all core engine systems
 
 # Core engine systems in dependency order
+add_subdirectory(core)     # Core logging and utilities
 add_subdirectory(ecs)      # Entity-Component-System (base dependency)
 add_subdirectory(math)     # SIMD-accelerated math library
+add_subdirectory(vision)   # Vision and FOV systems
 add_subdirectory(physics)  # Physics simulation system
 add_subdirectory(audio)    # 3D spatial audio system
+add_subdirectory(input)    # Input handling system
 add_subdirectory(graphics) # Vulkan-based graphics system
+add_subdirectory(world)    # Tilemap world system
 add_subdirectory(assets)   # Lore package asset management system
 
 # Create convenience target for all core systems

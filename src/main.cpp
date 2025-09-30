@@ -117,12 +117,11 @@ int main(int, char*[]) {
         std::cout << "TilemapWorldSystem initialized\n";
 
         // Load test room from Tiled
-        lore::world::TiledImporter tiled_importer;
-        lore::world::TiledMap test_room = tiled_importer.load_from_file("assets/maps/test_room.tmj");
+        lore::world::TiledMap test_room = lore::world::TiledImporter::load_tiled_map("assets/maps/test_room.tmj");
         std::cout << "Loaded test room: " << test_room.width << "x" << test_room.height << " tiles\n";
 
         // Import to world system
-        tiled_importer.import_to_world(world_system, test_room, 0.0f, 0.0f, 0.0f);
+        lore::world::TiledImporter::import_to_world(world_system, test_room, 0.0f, 0.0f, 0.0f);
         std::cout << "Imported " << test_room.layers.size() << " layers to world\n";
 
         auto last_time = std::chrono::high_resolution_clock::now();

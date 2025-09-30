@@ -9,6 +9,8 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 
+#include <glm/gtc/constants.hpp>
+
 #include <stdexcept>
 #include <fstream>
 #include <cstring>

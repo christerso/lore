@@ -15,8 +15,7 @@ project(Lore VERSION 1.0.0 LANGUAGES CXX)
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build shared libraries" FORCE)
 
-# CPM (CMake Package Manager) setup
-include(cmake/CPM.cmake)
+# Note: CPM removed - all dependencies now in third_party/ as git submodules
 
 # Configure SUPER STRICT compiler flags for MSVC
 if(MSVC)
@@ -105,84 +104,13 @@ endfunction()
 # Find Vulkan (required)
 find_package(Vulkan REQUIRED)
 
-# Add dependencies via CPM
-CPMAddPackage(
-    NAME glfw
-    GITHUB_REPOSITORY glfw/glfw
-    GIT_TAG 3.4
-    OPTIONS
-        "GLFW_BUILD_EXAMPLES OFF"
-        "GLFW_BUILD_TESTS OFF"
-        "GLFW_BUILD_DOCS OFF"
-        "GLFW_INSTALL OFF"
-        "GLFW_USE_HYBRID_HPG ON"
-)
-
-# VkBootstrap for easy Vulkan setup
-CPMAddPackage(
-    NAME vk-bootstrap
-    GITHUB_REPOSITORY charles-lunarg/vk-bootstrap
-    GIT_TAG v1.3.283
-)
-
-# GLM for mathematics
-CPMAddPackage(
-    NAME glm
-    GITHUB_REPOSITORY g-truc/glm
-    GIT_TAG 1.0.1
-    GIT_SHALLOW TRUE
-    OPTIONS
-        "GLM_ENABLE_CXX_23 ON"
-        "BUILD_SHARED_LIBS OFF"
-        "GLM_DISABLE_AUTO_DETECTION ON"
-        "BUILD_TESTING OFF"
-        "GLM_BUILD_TESTS OFF"
-)
+# Add all third-party dependencies
+add_subdirectory(third_party)
 
 # Disable GLM SIMD to avoid conflicts with our custom SIMD
 if(TARGET glm)
     target_compile_definitions(glm INTERFACE GLM_FORCE_PURE)
     target_compile_definitions(glm INTERFACE GLM_FORCE_MESSAGES)
-endif()
-
-# miniaudio for audio
-CPMAddPackage(
-    NAME miniaudio
-    GITHUB_REPOSITORY mackron/miniaudio
-    GIT_TAG 0.11.21
-    DOWNLOAD_ONLY YES
-)
-
-if(miniaudio_ADDED)
-    add_library(miniaudio INTERFACE)
-    target_include_directories(miniaudio INTERFACE ${miniaudio_SOURCE_DIR})
-endif()
-
-# miniz for compression (needed by tinyexr)
-# Using header-only mode via direct download
-CPMAddPackage(
-    NAME miniz
-    GITHUB_REPOSITORY richgel999/miniz
-    GIT_TAG 3.0.2
-    DOWNLOAD_ONLY YES
-)
-
-# Create header-only interface library for miniz
-if(miniz_ADDED)
-    add_library(miniz INTERFACE)
-    target_include_directories(miniz INTERFACE ${miniz_SOURCE_DIR})
-    target_compile_definitions(miniz INTERFACE MINIZ_NO_ZLIB_COMPATIBLE_NAMES)
-endif()
-
-# Disable warnings for all third-party libraries
-if(TARGET glfw)
-    target_disable_warnings(glfw)
-endif()
-if(TARGET vk-bootstrap)
-    target_disable_warnings(vk-bootstrap)
-endif()
-if(TARGET glm)
-    target_disable_warnings(glm)
 endif()
 
 # Include directories
@@ -192,12 +120,16 @@ include_directories(
 )
 
 # Core engine libraries
+add_subdirectory(src/core)
 add_subdirectory(src/ecs)
 add_subdirectory(src/math)
+add_subdirectory(src/vision)
 add_subdirectory(src/physics)
 add_subdirectory(src/audio)
-# add_subdirectory(src/assets)  # TODO: Fix assets system compilation issues
+add_subdirectory(src/input)
 add_subdirectory(src/graphics)
+add_subdirectory(src/world)
+# add_subdirectory(src/assets)  # TODO: Fix assets system compilation issues
 
 # Main executable
 add_executable(lore src/main.cpp)
@@ -205,6 +137,7 @@ add_executable(lore src/main.cpp)
 # Link libraries in proper dependency order
 target_link_libraries(lore PRIVATE
     lore_graphics    # Graphics system (depends on other systems)
+    lore_world       # World system (tilemap and Tiled importer)
     # lore_assets      # Asset system (depends on ECS and Math) - TODO: Fix compilation
     lore_audio       # Audio system (depends on ECS and Math)
     lore_physics     # Physics system (depends on ECS and Math)
@@ -234,7 +167,16 @@ function(compile_shader SHADER_SOURCE SHADER_OUTPUT)
     get_filename_component(SHADER_NAME ${SHADER_SOURCE} NAME)
 
     # Use glslangValidator from VulkanSDK
-    find_program(GLSLANG_VALIDATOR glslangValidator HINTS "${Vulkan_GLSLANG_VALIDATOR_EXECUTABLE}" PATHS "${VULKAN_SDK}/Bin" ENV VULKAN_SDK)
+    if(NOT GLSLANG_VALIDATOR)
+        find_program(GLSLANG_VALIDATOR
+            NAMES glslangValidator glslangValidator.exe
+            HINTS
+                "$ENV{VULKAN_SDK}/Bin"
+                "C:/VulkanSDK/1.4.321.1/Bin"
+            PATHS
+                "$ENV{VULKAN_SDK}/Bin"
+        )
+    endif()
 
     if(NOT GLSLANG_VALIDATOR)
         message(FATAL_ERROR "glslangValidator not found. Please install Vulkan SDK.")

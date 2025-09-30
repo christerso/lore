@@ -8,8 +8,7 @@ target_include_directories(lore_math
         ${CMAKE_SOURCE_DIR}/include
 )
 
-# Find and link GLM
-find_package(glm REQUIRED)
+# GLM is added as subdirectory in main CMakeLists.txt, no need to find_package
 
 # Enable modern C++ features
 target_compile_features(lore_math
