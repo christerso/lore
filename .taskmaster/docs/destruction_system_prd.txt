@@ -1,0 +1,194 @@
+# Destruction System Implementation - Product Requirements Document
+
+## Overview
+Implement a next-generation tile destruction system with Voronoi fracture, progressive damage, and structural integrity simulation. This system rivals AAA titles like Control, Teardown, and Red Faction Guerrilla.
+
+## Core Requirements
+
+### 1. Mesh Instancing & Resource Management
+- Implement TileMeshCache with reference counting
+- Single mesh shared by thousands of intact tiles
+- GPU instancing for 2 draw calls per room (not 121)
+- Memory: 64 bytes per intact tile
+- Auto-unload when reference count reaches zero
+
+### 2. Voronoi Fracture System (NOT Cubic Voxels)
+- Generate 15-30 irregular debris pieces per broken tile
+- Poisson disk sampling for fracture point distribution
+- 3D Voronoi diagram computation (Fortune's algorithm or voro++)
+- Clip Voronoi cells against original mesh geometry
+- Sutherland-Hodgman algorithm for polygon clipping
+- Transfer UVs and materials to fragments
+- Each fragment has unique geometry (vertices, indices, normals, UVs)
+
+### 3. Physics Properties for Debris
+- Calculate centroid, mass, and inertia tensor per piece
+- Position, rotation (quaternion), velocity, angular velocity
+- Realistic tumbling and rotation in flight
+- Collision detection between debris pieces
+- Settling/sleeping state when velocity drops below threshold
+
+### 4. Directional Fracture (Impact-Aware)
+- ImpactData struct: position, direction, force, type, duration
+- Impact types: PointImpact (bullet), BluntForce (hammer), Explosion, Cutting (axe), Crushing, Shearing
+- Stress-guided Voronoi: more fragments near impact point
+- Fragment size gradient: smaller near impact, larger away
+- Material-specific patterns:
+  * Stone: 5-8 large angular chunks
+  * Wood: 15-25 splinter-like shards along grain
+  * Glass: 20-40 sharp triangular pieces
+
+### 5. Progressive Damage System
+- Health-based state machine: Pristine → Scratched → Cracked → Damaged → Failing → Critical → Collapsed
+- Visible crack paths rendered as decals on intact mesh
+- Crack propagation: 0.1-1.0 m/s along stress lines
+- Crack width increases under stress (max 5cm)
+- Warning signs before structural failure
+- Damage accumulation tracked per tile
+
+### 6. Pre-Fractured Mesh Cache (Optional Enhancement)
+- Offline tool: lore-fracture-tool generates .fracture files
+- 5+ variants per mesh for visual variety
+- Zero runtime cost (<1ms load vs 10-50ms Voronoi)
+- Fallback to runtime Voronoi if no pre-fracture exists
+- File format stores pre-computed fragments and connections
+
+### 7. Multi-Material Destruction (Optional Enhancement)
+- Layered system: stone facade + wood studs + plaster
+- Each layer fractures independently with material-specific behavior
+- Brittle (stone, glass): shatters into many pieces
+- Ductile (metal): bends then tears
+- Fibrous (wood): splinters along grain
+- 3 layers typical: +5ms per layer
+
+### 8. Structural Integrity System (Optional Enhancement)
+- Load-bearing analysis: which tiles support which
+- Dependency graph using BFS traversal
+- Progressive collapse simulation (domino effect over 2-3 seconds)
+- Overload detection: tile fails if weight exceeds capacity
+- 2-5 tiles collapse per frame for dramatic effect
+
+### 9. Fluid Simulation Integration
+- Internal voxel approximation (4x4x4 cells) per irregular piece
+- Voxels NEVER rendered - only for liquid/smoke collision
+- Apply buoyancy force (Archimedes principle) to floating debris
+- Fluid drag based on relative velocity
+- Update voxel positions as pieces rotate/translate
+
+### 10. Artist-Controlled Fracture (Optional Enhancement)
+- Load annotations from FBX/glTF metadata (empty objects)
+- AnnotationType: WeakPoint, StructuralSupport, FractureLine, DontFracture, ForceFragment
+- Blender Python script to place weak points (e.g., door hinges)
+- Override procedural Voronoi with intentional design
+
+## Demo Scene Requirements
+
+### 2-Floor Test Room
+- Ground floor: 15x15 tiles with 4 pillars supporting upper floor
+- Upper floor: 15x15 walkable floor with alcove
+- Alcove extends over ground floor, supported by pillars
+- Breaking a pillar triggers progressive collapse of alcove
+- Visual showcase: cracks spread → pillar fails → floor tiles fall → domino effect
+
+### Tile Types Needed
+1. Floor tile (0.1m height)
+2. Wall tile (1.0m height, full cube)
+3. Pillar tile (1.0m height, structural support)
+4. Ceiling tile (0.1m height, hangs from below upper floor)
+
+### Test Scenarios
+1. Shoot bullet at pillar → small cone fracture
+2. Hit with hammer → large depression, radial cracks
+3. Explosive at pillar base → 20-30 fragments, progressive collapse
+4. Water/smoke flows through broken wall opening
+
+## Technical Specifications
+
+### Performance Targets
+- Voronoi fracture generation: <20ms per tile
+- Pre-fractured mesh load: <1ms per tile
+- Directional fracture overhead: +2ms
+- Crack propagation: 0.1ms per crack per frame (10 cracks = 1ms)
+- Structural analysis: <1ms for 100 tiles
+- Render performance: 2 draw calls for intact tiles, 1 per broken tile
+
+### Memory Budget
+- Intact tile: 64 bytes
+- Broken tile (Voronoi): ~50KB (20 pieces × 200 verts × 12 bytes)
+- Internal voxel approx: 1KB (64 voxels × 16 bytes)
+- Total per broken tile: ~51KB
+- Target: 100 broken tiles = 5MB
+
+### File Formats
+- .fracture format for pre-computed fractures
+- Tiled .tmj format for level design
+- FBX for 3D meshes
+- glTF metadata for artist annotations
+
+## Implementation Phases
+
+### Phase 1: Core Voronoi Fracture (Week 1) - PRIORITY
+1. Implement TileMeshCache with ref-counting
+2. Add TileState enum to TileInstance
+3. Create DebrisPiece struct with full geometry
+4. Implement fracture_mesh_voronoi() function:
+   - Poisson disk sampling for points
+   - 3D Voronoi diagram computation
+   - Clip cells against mesh geometry
+   - Calculate physics properties
+5. GPU instanced rendering for intact tiles
+6. Individual render per broken tile
+
+### Phase 2: Directional Fracture (Week 2)
+1. Create ImpactData struct
+2. Implement stress-guided point generation
+3. Add fragment size gradient
+4. Material-specific fracture patterns
+
+### Phase 3: Progressive Damage (Week 3)
+1. Add TileDamage struct with crack paths
+2. Implement crack propagation update loop
+3. Crack decal rendering on intact mesh
+4. Damage state machine
+
+### Phase 4: 2-Floor Demo Scene (Week 4)
+1. Create 2-floor map in Tiled (15x15 with pillars)
+2. Add pillar tile type with load-bearing properties
+3. Implement basic structural integrity (pillar → floor dependency)
+4. Test progressive collapse sequence
+
+### Phase 5: Advanced Features (Optional, Weeks 5-6)
+1. Pre-fracture tool and file format
+2. Multi-material layers
+3. Full structural integrity system
+4. Artist annotation support
+
+## Success Criteria
+
+### Minimum Viable Product (Phases 1-4)
+- ✅ Intact tiles use mesh instancing (2 draw calls)
+- ✅ Broken tiles fracture into 15-30 irregular Voronoi pieces
+- ✅ Debris has realistic physics (rotation, settling)
+- ✅ Visual quality far exceeds cubic voxels
+- ✅ 2-floor demo room works with pillar destruction
+- ✅ Performance: <20ms fracture, ~1.5ms render for mixed scene
+
+### Full System (All Phases)
+- ✅ Directional fracture based on impact type
+- ✅ Progressive damage with visible cracks
+- ✅ Pre-fractured meshes for instant destruction
+- ✅ Multi-material support (stone + wood + plaster)
+- ✅ Structural integrity with progressive collapse
+- ✅ Artist-controlled weak points
+- ✅ Fluid simulation integration
+
+## Non-Goals
+- ❌ Cubic voxel debris (looks bad)
+- ❌ Uniform procedural fracture (boring)
+- ❌ Instant destruction without warning
+- ❌ Simple health points without structural modeling
+
+## References
+- docs/systems/TILE_INSTANCING_AND_DESTRUCTION.md
+- docs/systems/ADVANCED_DESTRUCTION_SYSTEM.md
+- AAA Games: Control, Teardown, Red Faction Guerrilla, Rainbow Six Siege

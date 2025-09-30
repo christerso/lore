@@ -13,17 +13,6 @@
         "subtasks": []
       },
       {
-        "id": 2,
-        "title": "Implement real asset loading functionality for images, audio files, and 3D models",
-        "description": "Replace placeholder implementations in the assets system with actual file loading capabilities using appropriate libraries for images (stb_image), audio files (miniaudio), and 3D models (assimp or tinygltf).",
-        "details": "This task involves implementing comprehensive asset loading functionality to replace any placeholder or stub implementations:\n\n1. **Image Loading Implementation**:\n   - Integrate stb_image or similar library for loading common image formats (PNG, JPEG, BMP, TGA)\n   - Implement texture creation from loaded image data\n   - Support for different pixel formats (RGBA, RGB, grayscale)\n   - Add mipmap generation for loaded textures\n   - Implement image caching to avoid redundant loads\n   - Handle error cases for missing or corrupted image files\n\n2. **Audio File Loading**:\n   - Integrate miniaudio or OpenAL for audio file support\n   - Implement loading for common audio formats (WAV, MP3, OGG)\n   - Create audio buffer management system\n   - Support for both streaming and preloaded audio\n   - Implement basic audio playback controls (play, pause, stop, volume)\n   - Add spatial audio support for 3D positioning\n\n3. **3D Model Loading**:\n   - Integrate assimp or tinygltf for 3D model loading\n   - Support common formats (GLTF/GLB, OBJ, FBX)\n   - Parse mesh data including vertices, indices, normals, UV coordinates\n   - Load material properties and textures referenced by models\n   - Support for skeletal animation data if present\n   - Implement model instancing for efficient rendering\n\n4. **Asset Manager Integration**:\n   - Update existing asset manager to use new loading functions\n   - Implement async loading with callback system\n   - Add progress reporting for large asset loads\n   - Create unified error handling and logging\n   - Implement hot-reloading for development\n   - Add asset dependency tracking\n\n5. **Memory Management**:\n   - Implement proper resource cleanup and deallocation\n   - Add reference counting for shared assets\n   - Create memory pools for frequently loaded/unloaded assets\n   - Monitor and report memory usage statistics\n\n6. **File System Integration**:\n   - Support loading from filesystem and archive formats\n   - Implement path resolution for asset references\n   - Add support for resource packs or bundles\n   - Create asset manifest system for tracking available resources",
-        "testStrategy": "1. **Image Loading Tests**:\n   - Load test images in various formats (PNG, JPEG, BMP)\n   - Verify pixel data correctness by comparing with known values\n   - Test loading of corrupted or missing files for proper error handling\n   - Measure load times for different image sizes\n   - Verify mipmap generation produces correct levels\n\n2. **Audio Loading Tests**:\n   - Load and play test audio files in different formats\n   - Verify audio playback without distortion or artifacts\n   - Test streaming vs preloaded audio performance\n   - Measure memory usage for large audio files\n   - Test spatial audio positioning in 3D space\n\n3. **3D Model Loading Tests**:\n   - Load test models in GLTF, OBJ formats\n   - Verify vertex and index data integrity\n   - Check material and texture references are resolved\n   - Test loading of animated models if supported\n   - Benchmark loading times for complex models\n\n4. **Integration Tests**:\n   - Create test scene loading multiple asset types\n   - Verify async loading doesn't block main thread\n   - Test hot-reload functionality during runtime\n   - Monitor memory usage across multiple load/unload cycles\n   - Stress test with rapid asset loading/unloading\n\n5. **Performance Tests**:\n   - Measure asset loading times and create benchmarks\n   - Profile memory allocation patterns\n   - Test cache hit rates for frequently used assets\n   - Verify no memory leaks using valgrind or similar tools\n\n6. **Error Handling Tests**:\n   - Test with missing asset files\n   - Test with corrupted file headers\n   - Test with unsupported file formats\n   - Verify graceful degradation when assets fail to load\n   - Check error messages are informative and actionable",
-        "status": "pending",
-        "dependencies": [],
-        "priority": "medium",
-        "subtasks": []
-      },
-      {
         "id": 3,
         "title": "Create .lore package creation tools and utilities",
         "description": "Implement command-line tools for building, packing, and managing .lore asset packages for distribution, including package creation, validation, extraction, and metadata management capabilities.",
@@ -222,15 +211,61 @@
       {
         "id": 16,
         "title": "Research and Implement Tiled Map Editor Integration",
-        "description": "Establish integration with Tiled map editor for level design workflow, supporting both existing JSON export format and potentially custom JavaScript export plugins for enhanced control over map data export.",
-        "details": "This task involves researching and implementing the optimal integration approach with Tiled map editor:\n\n1. **Research Phase**:\n   - Analyze Tiled's native JSON (.tmj) export format structure and capabilities\n   - Review TiledImporter's existing .tmj format support in the codebase\n   - Document Tiled's JavaScript scripting API (tiled.registerMapFormat)\n   - Evaluate pros/cons of each integration approach:\n     * Option 1: Parse existing JSON export (quickest, leverages TiledImporter)\n     * Option 2: Custom JavaScript export plugin (more control, direct format)\n     * Option 3: MCP server for Tiled automation (most complex, full automation)\n\n2. **Initial Implementation - JSON Export Approach**:\n   - Enhance TiledImporter to fully support .tmj format features:\n     * Tileset references and external tileset files (.tsx)\n     * Object layers with custom properties\n     * Multi-layer support (terrain, objects, collision)\n     * Custom properties for tile-to-mesh mapping\n   - Create TiledMapLoader class to handle file loading and parsing\n   - Implement tile ID to 3D mesh/prefab mapping system\n   - Support for Tiled's infinite map format if needed\n   - Handle tile rotations and flipping flags\n\n3. **Custom Export Plugin Development (if needed)**:\n   - Create JavaScript plugin for Tiled using tiled.registerMapFormat\n   - Export directly to engine's native format:\n     * Optimize data structure for runtime performance\n     * Pre-process tile-to-mesh mappings\n     * Include only necessary data fields\n     * Support custom metadata and properties\n   - Plugin features:\n     * Validation of map data against engine requirements\n     * Automatic mesh instance batching hints\n     * Chunk boundary calculation for streaming\n     * Export statistics and warnings\n\n4. **Integration with Engine Systems**:\n   - Connect to 3D Tilemap System for world generation\n   - Map Tiled layers to engine concepts:\n     * Terrain layer → floor/ground meshes\n     * Wall layer → wall mesh instances\n     * Object layer → entity spawners\n     * Collision layer → physics colliders\n   - Property mapping system:\n     * Custom Tiled properties → component data\n     * Tile IDs → mesh asset paths\n     * Object types → entity prefabs\n\n5. **Development Workflow Tools**:\n   - Hot-reload support for .tmj files during development\n   - Validation tool to check Tiled maps against engine constraints\n   - Debug visualization of loaded Tiled data in engine\n   - Performance profiling for large map loading\n\n6. **Documentation and Examples**:\n   - Create Tiled integration guide for level designers\n   - Document custom property conventions\n   - Provide example Tiled projects and tilesets\n   - Write troubleshooting guide for common issues",
-        "testStrategy": "1. **JSON Import Tests**:\n   - Create test Tiled maps with various features (multiple layers, objects, properties)\n   - Verify correct parsing of .tmj files with different configurations\n   - Test external tileset (.tsx) loading and resolution\n   - Validate tile rotation and flipping transformations\n   - Test edge cases: empty maps, single tile, massive maps\n\n2. **Custom Export Plugin Tests** (if implemented):\n   - Export same map via JSON and custom plugin, compare results\n   - Verify custom format produces smaller file sizes\n   - Test plugin error handling for invalid map configurations\n   - Validate exported data structure matches engine expectations\n\n3. **Integration Tests**:\n   - Load Tiled map and verify correct 3D mesh generation\n   - Test multi-layer maps render in correct order\n   - Verify custom properties transfer to entity components\n   - Test object layer spawns entities at correct positions\n   - Validate collision layer generates proper physics shapes\n\n4. **Performance Tests**:\n   - Measure load times for maps of various sizes (100x100, 1000x1000)\n   - Profile memory usage during map loading\n   - Test streaming performance with chunked maps\n   - Verify mesh instancing works correctly for repeated tiles\n\n5. **Workflow Tests**:\n   - Modify .tmj file while engine running, verify hot-reload\n   - Test round-trip: Tiled → Engine → Tiled\n   - Validate error messages for missing tilesets or assets\n   - Test with real game levels created by designers",
+        "description": "Establish integration with Tiled map editor for level design workflow. Basic JSON import is complete and functional. Advanced features like bi-directional control, JavaScript plugins, and live sync remain to be implemented.",
         "status": "pending",
         "dependencies": [
           "13"
         ],
         "priority": "high",
-        "subtasks": []
+        "details": "Current implementation status and remaining work:\n\n**COMPLETED - Basic Import Functionality**:\n- TiledImporter class successfully loads and parses .tmj files\n- Reads custom tile properties (mesh_path, height, collision_type, etc.)\n- Integrates with TilemapWorldSystem for 3D world generation\n- Test room (11x11 tiles) loads and renders correctly\n- Basic tile-to-mesh mapping system operational\n\n**REMAINING - Advanced Integration Features**:\n\n1. **Enhanced Import Capabilities**:\n   - External tileset files (.tsx) support\n   - Multi-layer support (terrain, objects, collision layers)\n   - Object layers with custom properties for entity spawning\n   - Tile rotation and flipping flags handling\n   - Support for larger maps and infinite map format\n   - Chunk-based loading for streaming large worlds\n\n2. **Custom JavaScript Export Plugin**:\n   - Create Tiled plugin using tiled.registerMapFormat API\n   - Export directly to engine's optimized binary format\n   - Pre-process tile-to-mesh mappings for faster loading\n   - Validation of map data against engine requirements\n   - Automatic mesh instance batching hints\n   - Export statistics and warnings in Tiled UI\n\n3. **Bi-directional Integration (MCP Server)**:\n   - Implement MCP server for Tiled automation\n   - Control Tiled from engine (open maps, modify tiles)\n   - Programmatic map generation from engine\n   - Query and modify map data via API\n   - Synchronize changes between Tiled and engine\n\n4. **Live Development Workflow**:\n   - Hot-reload support for .tmj files during runtime\n   - File watcher for automatic reload on save\n   - Live sync between Tiled and running engine\n   - Debug visualization overlay for loaded tile data\n   - Performance profiling for map loading operations\n   - Validation tool for checking map constraints\n\n5. **Documentation and Tooling**:\n   - Complete integration guide for level designers\n   - Document all supported custom properties\n   - Create example Tiled project with standard tileset\n   - Troubleshooting guide for common issues\n   - Best practices for performance optimization",
+        "testStrategy": "Testing approach divided by implementation status:\n\n**COMPLETED - Basic Import Tests**:\n- ✓ TiledImporter loads simple .tmj files\n- ✓ Custom properties are parsed correctly\n- ✓ Integration with TilemapWorldSystem works\n- ✓ 11x11 test room renders properly\n\n**REMAINING - Enhanced Feature Tests**:\n\n1. **Extended Import Tests**:\n   - Test external tileset (.tsx) loading and resolution\n   - Verify multi-layer maps (terrain, walls, objects)\n   - Validate tile rotation and flipping transformations\n   - Test large maps (1000x1000) and infinite maps\n   - Verify chunk-based streaming for performance\n\n2. **JavaScript Plugin Tests**:\n   - Compare JSON vs custom format export (size, speed)\n   - Test plugin error handling for invalid configurations\n   - Verify optimized binary format loads faster\n   - Validate batching hints improve rendering\n\n3. **Bi-directional Integration Tests**:\n   - Test MCP server connection and commands\n   - Verify programmatic map generation\n   - Test round-trip: Engine → Tiled → Engine\n   - Validate synchronized editing workflow\n\n4. **Live Workflow Tests**:\n   - Modify .tmj while engine running, verify hot-reload\n   - Test file watcher responds to all change types\n   - Measure reload performance impact\n   - Verify debug overlay shows correct tile info\n\n5. **Performance Benchmarks**:\n   - Load time comparison: JSON vs binary format\n   - Memory usage for various map sizes\n   - Streaming performance with chunked maps\n   - Mesh instancing efficiency measurements",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Enhance TiledImporter for production features",
+            "description": "Extend existing TiledImporter to support external tilesets, multi-layer maps, object layers, rotations, and large/infinite maps",
+            "status": "pending",
+            "dependencies": [],
+            "details": "",
+            "testStrategy": ""
+          },
+          {
+            "id": 2,
+            "title": "Develop custom JavaScript export plugin for Tiled",
+            "description": "Create Tiled plugin for optimized binary export format with validation and batching hints",
+            "status": "pending",
+            "dependencies": [],
+            "details": "",
+            "testStrategy": ""
+          },
+          {
+            "id": 3,
+            "title": "Implement MCP server for bi-directional integration",
+            "description": "Build MCP server to control Tiled from engine and enable programmatic map generation",
+            "status": "pending",
+            "dependencies": [],
+            "details": "",
+            "testStrategy": ""
+          },
+          {
+            "id": 4,
+            "title": "Add hot-reload and live sync capabilities",
+            "description": "Implement file watching, hot-reload, and live synchronization between Tiled and engine",
+            "status": "pending",
+            "dependencies": [],
+            "details": "",
+            "testStrategy": ""
+          },
+          {
+            "id": 5,
+            "title": "Create documentation and example projects",
+            "description": "Write comprehensive guides, document properties, and provide example Tiled projects",
+            "status": "pending",
+            "dependencies": [],
+            "details": "",
+            "testStrategy": ""
+          }
+        ]
       },
       {
         "id": 17,
@@ -250,7 +285,7 @@
         "id": 18,
         "title": "Wire up TilemapWorldSystem to main game loop",
         "description": "Integrate the TilemapWorldSystem into main.cpp, initialize the world system with test room data from TiledImporter, handle update cycles, and add camera controls for 3D world navigation.",
-        "status": "pending",
+        "status": "done",
         "dependencies": [
           "11",
           "12",
@@ -259,7 +294,8 @@
         "priority": "high",
         "details": "Implementation steps for TilemapWorldSystem integration:\n\n1. **Main.cpp Integration** (COMPLETED):\n   - ✓ Included TilemapWorldSystem headers\n   - ✓ Created TilemapWorldSystem instance after ECS World initialization\n   - ✓ Passed Vulkan context and ECS World reference to constructor\n   - ✓ Registered TilemapWorldSystem with ECS as a system\n\n2. **TiledImporter Setup** (COMPLETED):\n   - ✓ Implemented TiledImporter class to load Tiled (.tmx) map files\n   - ✓ Parse tile layer data, object layers, and custom properties\n   - ✓ Convert Tiled format to internal tilemap representation\n   - ✓ Created test room map file (11x11 test room)\n   - ✓ Map tile GIDs to FBX mesh references in tile properties\n\n3. **Fix Build Dependencies** (CRITICAL - NEW):\n   - Fix missing vk_mem_alloc.h header dependency\n   - Fix missing lore/core/types.hpp header\n   - Ensure all Vulkan memory allocation headers are properly included\n   - Verify core type definitions are available\n\n4. **World Initialization**:\n   - ✓ Load test room map using TiledImporter on startup (11x11 room loads successfully)\n   - Generate ECS entities for each tile (walls, floors, props)\n   - Assign Transform, MeshRenderer, and Collider components to tile entities\n   - Set up mesh instancing for identical tiles (walls, floors)\n   - Initialize spatial partitioning for efficient culling\n\n5. **Game Loop Integration**:\n   - Add TilemapWorldSystem::update() to main game loop\n   - Handle chunk loading/unloading based on camera position\n   - Update tile entity transforms and visibility\n   - Process tile interactions and state changes\n   - Synchronize with rendering system for draw calls\n\n6. **Camera System Implementation**:\n   - Create FreeFlyCameraController component\n   - Implement WASD movement with Shift/Space for vertical movement\n   - Mouse look for rotation (pitch/yaw)\n   - Scroll wheel for FOV adjustment\n   - Camera frustum culling integration\n   - Smooth camera interpolation for fluid movement\n\n7. **Rendering Integration**:\n   - Connect TilemapWorldSystem with deferred renderer\n   - Load FBX meshes referenced in tile properties\n   - Submit tile mesh instances to G-Buffer geometry pass\n   - Implement LOD system for distant tiles\n   - Add debug visualization for tile boundaries and chunks\n\n8. **Memory Management**:\n   - Implement chunk pooling to avoid allocation overhead\n   - Use arena allocators for tile entity components\n   - Profile and optimize mesh instance buffer updates",
         "testStrategy": "1. **Integration Tests**:\n   - ✓ TilemapWorldSystem initializes without crashes\n   - ✓ Test room map (11x11) loads correctly from Tiled file\n   - ✓ FBX mesh references are properly parsed from tile properties\n   - Verify build compiles after fixing header dependencies\n   - Check that all tiles generate corresponding ECS entities\n   - Validate mesh instances are created for tile types\n\n2. **Build Fix Tests**:\n   - Verify vk_mem_alloc.h is properly included and linked\n   - Confirm lore/core/types.hpp exists and contains required type definitions\n   - Test clean build passes all compilation stages\n   - Ensure no undefined symbol errors during linking\n\n3. **Rendering Tests**:\n   - Ensure all tiles render with correct FBX meshes and materials\n   - Verify instancing reduces draw calls for identical tiles\n   - Test frustum culling removes off-screen tiles\n   - Check LOD system switches mesh quality at distance thresholds\n\n4. **Camera Tests**:\n   - Test WASD movement in all directions\n   - Verify mouse look controls pitch/yaw correctly\n   - Ensure camera doesn't clip through solid tiles\n   - Test smooth interpolation between positions\n\n5. **Performance Tests**:\n   - Profile frame time with loaded 11x11 test room\n   - Measure chunk loading/unloading time\n   - Monitor memory usage during world exploration\n   - Verify 60+ FPS once graphics errors are resolved\n\n6. **Update Loop Tests**:\n   - Confirm world updates every frame\n   - Test tile state changes propagate correctly\n   - Verify spatial queries return correct tile entities",
-        "subtasks": []
+        "subtasks": [],
+        "updatedAt": "2025-09-30T20:22:57.460Z"
       },
       {
         "id": 19,
@@ -370,17 +406,114 @@
         ],
         "priority": "medium",
         "subtasks": []
+      },
+      {
+        "id": 23,
+        "title": "Implement TileMeshCache with GPU Instancing",
+        "description": "Create efficient mesh resource management system with reference counting and GPU instancing for intact tiles",
+        "details": "Create TileMeshCache class with std::unordered_map<MeshID, shared_ptr<MeshData>>. Implement reference counting using atomic integers. Set up GPU instancing with instance buffers for transforms (model matrices). Use glDrawElementsInstanced or equivalent for rendering. Create instance data structure: struct TileInstanceData { glm::mat4 transform; uint32_t tileState; uint32_t materialID; }. Implement automatic unloading when ref count reaches zero. Target memory usage: 64 bytes per intact tile. Ensure single mesh is shared by thousands of tiles.",
+        "testStrategy": "Unit tests for reference counting logic. Performance benchmarks measuring draw calls (target: 2 per room). Memory profiling to verify 64 bytes per tile. Stress test with 10,000+ tiles sharing same mesh. Visual verification of instanced rendering.",
+        "priority": "high",
+        "dependencies": [],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": 24,
+        "title": "Core Voronoi Fracture System Implementation",
+        "description": "Develop 3D Voronoi fracture algorithm to generate 15-30 irregular debris pieces from broken tiles",
+        "details": "Implement Poisson disk sampling for uniform fracture point distribution (minimum distance between points). Integrate voro++ library or implement Fortune's algorithm for 3D Voronoi computation. Create DebrisPiece struct: struct DebrisPiece { std::vector<glm::vec3> vertices; std::vector<uint32_t> indices; std::vector<glm::vec3> normals; std::vector<glm::vec2> uvs; uint32_t materialID; }. Implement Sutherland-Hodgman algorithm for clipping Voronoi cells against original mesh boundaries. Calculate UV coordinates for new vertices using barycentric interpolation. Generate per-fragment normals using face normals and smoothing. Target: 15-30 pieces per fracture, <20ms generation time.",
+        "testStrategy": "Unit tests for Poisson disk sampling distribution. Validate Voronoi cells are convex and non-overlapping. Performance tests ensuring <20ms fracture time. Visual tests comparing fragments to original mesh. Verify UV mapping continuity across fragments.",
+        "priority": "high",
+        "dependencies": [
+          23
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": 25,
+        "title": "Physics Properties and Debris Simulation",
+        "description": "Calculate physics properties for debris pieces and implement realistic tumbling and collision",
+        "details": "For each debris piece, calculate: centroid using volume-weighted average, mass from volume and material density, inertia tensor using parallel axis theorem. Create physics state: struct DebrisPhysics { glm::vec3 position, velocity, angularVelocity; glm::quat rotation; float mass; glm::mat3 inertiaTensor; bool sleeping; }. Implement Euler integration for position/rotation updates. Add angular damping (0.98 per frame) for realistic tumbling. Implement simple AABB collision detection between pieces. Add sleeping threshold: velocity < 0.01 m/s and angular velocity < 0.1 rad/s. Use spatial hashing for broad-phase collision detection.",
+        "testStrategy": "Unit tests for centroid and inertia calculations. Physics simulation tests with known outcomes. Verify conservation of momentum in collisions. Performance tests with 100+ debris pieces. Visual validation of realistic tumbling motion.",
+        "priority": "high",
+        "dependencies": [
+          24
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": 26,
+        "title": "Directional and Impact-Aware Fracture System",
+        "description": "Implement stress-guided fracture patterns based on impact type and material properties",
+        "details": "Create ImpactData struct: struct ImpactData { glm::vec3 position, direction; float force; enum Type { PointImpact, BluntForce, Explosion, Cutting, Crushing, Shearing } type; float duration; }. Implement stress-guided Voronoi point generation: higher density near impact (use exponential falloff), radial bias for explosions, linear bias for cutting. Material-specific patterns: Stone (5-8 pieces, angular, large variation), Wood (15-25 pieces, elongated along grain direction), Glass (20-40 pieces, sharp triangular, radial from impact). Fragment size gradient using weighted Voronoi (smaller cells near impact). Add +2ms overhead target for directional processing.",
+        "testStrategy": "Visual tests for each impact type and material. Verify fragment count matches material specs. Test fragment size gradient distribution. Performance tests ensuring <2ms overhead. Validate stress propagation patterns.",
+        "priority": "medium",
+        "dependencies": [
+          24
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": 27,
+        "title": "Progressive Damage and Crack System",
+        "description": "Build health-based damage states with visible crack propagation and warning signs",
+        "details": "Create TileDamage struct: struct TileDamage { float health; enum State { Pristine, Scratched, Cracked, Damaged, Failing, Critical, Collapsed } state; std::vector<CrackPath> cracks; float damageAccumulation; }. Implement crack propagation: CrackPath with start/end points and width, propagate at 0.1-1.0 m/s along stress lines using A* pathfinding, width increases under stress (max 5cm). Render cracks as decal textures on intact mesh using projective texturing. State transitions at health thresholds: 100%, 80%, 60%, 40%, 20%, 10%, 0%. Visual feedback: dust particles, slight shaking at Critical state. Update loop targets 0.1ms per crack per frame.",
+        "testStrategy": "Unit tests for state transitions. Visual tests for crack rendering. Performance tests with 10+ active cracks. Verify crack propagation speed and direction. Test warning sign visibility and timing.",
+        "priority": "medium",
+        "dependencies": [
+          23
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": 28,
+        "title": "Two-Floor Demo Scene with Structural Integrity",
+        "description": "Create test environment demonstrating progressive collapse and pillar dependencies",
+        "details": "Design in Tiled: Ground floor 15x15 tiles with 4 load-bearing pillars at (5,5), (5,10), (10,5), (10,10). Upper floor 15x15 with 5x5 alcove extending over ground floor. Define tile types: FloorTile (0.1m height), WallTile (1.0m cube), PillarTile (1.0m, structural: true, loadCapacity: 1000kg), CeilingTile (0.1m, hanging). Implement basic structural integrity: dependency graph using adjacency list, BFS traversal to find supported tiles, weight calculation propagating downward, overload detection (weight > capacity triggers collapse). Progressive collapse: 2-5 tiles per frame, 2-3 second total collapse time. Add visual indicators: stress coloring on overloaded tiles.",
+        "testStrategy": "Test each scenario: bullet (small cone), hammer (radial cracks), explosive (full collapse). Verify pillar destruction triggers alcove collapse. Measure collapse timing (2-3 seconds). Test load propagation calculations. Visual validation of dramatic collapse sequence.",
+        "priority": "high",
+        "dependencies": [
+          25,
+          27
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": 29,
+        "title": "Fluid Simulation Integration with Voxel Approximation",
+        "description": "Add internal voxel grid for fluid/debris interaction without rendering voxels",
+        "details": "Create internal 4x4x4 voxel grid per debris piece: struct VoxelGrid { bool occupied[64]; glm::vec3 cellSize; glm::mat4 localToWorld; }. Never render voxels - only for physics. Calculate buoyancy: submerged volume using voxel occupancy, upward force = fluid_density * submerged_volume * gravity. Add drag force: F_drag = -0.5 * drag_coefficient * velocity.length() * velocity.normalized(). Update voxel positions as debris rotates using transform matrix. Interface with existing fluid system through collision callbacks. Memory budget: 1KB per debris piece for voxel data.",
+        "testStrategy": "Unit tests for buoyancy calculations. Verify voxels are never rendered. Test fluid force calculations. Visual tests of debris floating/sinking. Performance impact <0.5ms for 50 pieces in fluid.",
+        "priority": "low",
+        "dependencies": [
+          25
+        ],
+        "status": "pending",
+        "subtasks": []
+      },
+      {
+        "id": 30,
+        "title": "Pre-Fracture Tool and Offline Generation Pipeline",
+        "description": "Build offline tool to pre-compute fracture patterns for instant loading at runtime",
+        "details": "Create standalone tool 'lore-fracture-tool': command-line interface accepting mesh files (FBX, OBJ, glTF), generate 5+ fracture variants using different Voronoi seeds. Output .fracture file format: header with version and mesh hash, fragment count and variant count, per-fragment: vertex/index/normal/UV data, connectivity graph for structural analysis. Implement runtime loader: fast deserialization (<1ms target), fallback to runtime Voronoi if file missing, cache loaded fractures in memory. Add variation selection: random or based on impact parameters. File size target: ~250KB per mesh (5 variants × 50KB).",
+        "testStrategy": "Compare pre-fractured vs runtime quality. Benchmark load times (<1ms target). Test fallback mechanism. Validate file format compatibility. Memory usage tests with 50+ cached fractures.",
+        "priority": "low",
+        "dependencies": [
+          24
+        ],
+        "status": "pending",
+        "subtasks": []
       }
     ],
     "metadata": {
-      "version": "1.0.0",
-      "lastModified": "2025-09-30T17:41:20.552Z",
-      "taskCount": 22,
-      "completedCount": 6,
-      "tags": [
-        "master"
-      ],
-      "created": "2025-09-30T17:41:25.590Z",
+      "created": "2025-09-30T20:24:14.530Z",
+      "updated": "2025-09-30T20:30:49.741Z",
       "description": "Tasks for master context"
     }
   },
