@@ -3,6 +3,7 @@ add_library(lore_world STATIC
     tilemap_world_system.cpp
     tiled_importer.cpp
     tile_mesh_cache.cpp
+    voronoi_fracture.cpp
 )
 
 # Link dependencies
