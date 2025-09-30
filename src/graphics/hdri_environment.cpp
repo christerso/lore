@@ -199,6 +199,11 @@ HDRIEnvironment::HDRIEnvironment(HDRIEnvironment&& other) noexcept
     , m_params(other.m_params)
     , m_textures(other.m_textures)
     , m_ibl_generated(other.m_ibl_generated)
+    , m_sun_info(other.m_sun_info)
+    , m_sun_detected(other.m_sun_detected)
+    , m_pixel_data(std::move(other.m_pixel_data))
+    , m_pixel_width(other.m_pixel_width)
+    , m_pixel_height(other.m_pixel_height)
     , m_equirect_to_cubemap_layout(other.m_equirect_to_cubemap_layout)
     , m_equirect_to_cubemap_pipeline(other.m_equirect_to_cubemap_pipeline)
     , m_irradiance_layout(other.m_irradiance_layout)
@@ -213,6 +218,10 @@ HDRIEnvironment::HDRIEnvironment(HDRIEnvironment&& other) noexcept
 
     // Clear other's handles
     other.m_textures = {};
+    other.m_sun_detected = false;
+    other.m_pixel_data.clear();
+    other.m_pixel_width = 0;
+    other.m_pixel_height = 0;
     other.m_equirect_to_cubemap_layout = VK_NULL_HANDLE;
     other.m_equirect_to_cubemap_pipeline = VK_NULL_HANDLE;
     other.m_irradiance_layout = VK_NULL_HANDLE;
@@ -234,6 +243,11 @@ HDRIEnvironment& HDRIEnvironment::operator=(HDRIEnvironment&& other) noexcept {
         m_params = other.m_params;
         m_textures = other.m_textures;
         m_ibl_generated = other.m_ibl_generated;
+        m_sun_info = other.m_sun_info;
+        m_sun_detected = other.m_sun_detected;
+        m_pixel_data = std::move(other.m_pixel_data);
+        m_pixel_width = other.m_pixel_width;
+        m_pixel_height = other.m_pixel_height;
         m_equirect_to_cubemap_layout = other.m_equirect_to_cubemap_layout;
         m_equirect_to_cubemap_pipeline = other.m_equirect_to_cubemap_pipeline;
         m_irradiance_layout = other.m_irradiance_layout;
@@ -247,6 +261,10 @@ HDRIEnvironment& HDRIEnvironment::operator=(HDRIEnvironment&& other) noexcept {
         m_descriptor_set = other.m_descriptor_set;
 
         other.m_textures = {};
+        other.m_sun_detected = false;
+        other.m_pixel_data.clear();
+        other.m_pixel_width = 0;
+        other.m_pixel_height = 0;
         other.m_equirect_to_cubemap_layout = VK_NULL_HANDLE;
         other.m_equirect_to_cubemap_pipeline = VK_NULL_HANDLE;
         other.m_irradiance_layout = VK_NULL_HANDLE;
@@ -335,6 +353,11 @@ HDRIEnvironment HDRIEnvironment::load_from_file(VulkanContext& context, const st
     // Load HDR image data
     uint32_t width = 0, height = 0;
     std::vector<float> pixel_data = load_hdr_image(file_path, width, height);
+
+    // Store pixel data for sun detection
+    hdri.m_pixel_data = pixel_data;
+    hdri.m_pixel_width = width;
+    hdri.m_pixel_height = height;
 
     // Create equirectangular texture on GPU
     hdri.create_equirectangular_texture(context, pixel_data, width, height);
@@ -1297,6 +1320,223 @@ float HDRIEnvironment::calculate_average_luminance() const {
     // For now, return a default value
     // A complete implementation would use a compute shader to calculate this
     return 1.0f;
+}
+
+HDRISunInfo HDRIEnvironment::detect_sun() const {
+    // Return cached result if already detected
+    if (m_sun_detected) {
+        return m_sun_info;
+    }
+
+    // Initialize result with default values (no sun detected)
+    HDRISunInfo info{};
+    info.direction = glm::vec3(0.0f, 1.0f, 0.0f);  // Default upward direction
+    info.azimuth = 0.0f;
+    info.elevation = glm::half_pi<float>();
+    info.peak_luminance = 0.0f;
+    info.average_luminance = 0.0f;
+    info.has_sun = false;
+
+    // Validate pixel data availability
+    if (m_pixel_data.empty() || m_pixel_width == 0 || m_pixel_height == 0) {
+        m_sun_info = info;
+        m_sun_detected = true;
+        return info;
+    }
+
+    // Single-pass scan: find peak luminance and accumulate average
+    float max_luminance = 0.0f;
+    uint32_t max_u = 0;
+    uint32_t max_v = 0;
+    double luminance_sum = 0.0;  // Use double for numerical stability
+    uint32_t pixel_count = m_pixel_width * m_pixel_height;
+
+    // Rec. 709 luminance coefficients (standard for HDR)
+    constexpr float r_coef = 0.2126f;
+    constexpr float g_coef = 0.7152f;
+    constexpr float b_coef = 0.0722f;
+
+    for (uint32_t v = 0; v < m_pixel_height; ++v) {
+        for (uint32_t u = 0; u < m_pixel_width; ++u) {
+            size_t pixel_index = (static_cast<size_t>(v) * m_pixel_width + u) * 4;
+
+            // Validate array bounds
+            if (pixel_index + 2 >= m_pixel_data.size()) {
+                continue;
+            }
+
+            float r = m_pixel_data[pixel_index + 0];
+            float g = m_pixel_data[pixel_index + 1];
+            float b = m_pixel_data[pixel_index + 2];
+
+            // Calculate relative luminance
+            float luminance = r_coef * r + g_coef * g + b_coef * b;
+
+            // Clamp negative values (invalid HDR data)
+            if (luminance < 0.0f) {
+                luminance = 0.0f;
+            }
+
+            // Track peak luminance
+            if (luminance > max_luminance) {
+                max_luminance = luminance;
+                max_u = u;
+                max_v = v;
+            }
+
+            // Accumulate for average
+            luminance_sum += static_cast<double>(luminance);
+        }
+    }
+
+    // Calculate average luminance
+    float average_luminance = pixel_count > 0
+        ? static_cast<float>(luminance_sum / static_cast<double>(pixel_count))
+        : 0.0f;
+
+    info.peak_luminance = max_luminance;
+    info.average_luminance = average_luminance;
+
+    // Determine if this is an outdoor HDRI with sun
+    // Outdoor HDRIs have a bright sun disk that's significantly brighter than average
+    // Indoor HDRIs have more even lighting
+    float luminance_ratio = (average_luminance > 0.0f)
+        ? (max_luminance / average_luminance)
+        : 0.0f;
+
+    info.has_sun = (luminance_ratio >= m_params.sun_detection_threshold);
+
+    if (!info.has_sun) {
+        // Indoor HDRI: return default upward direction
+        m_sun_info = info;
+        m_sun_detected = true;
+        return info;
+    }
+
+    // Convert pixel coordinates to normalized UV [0, 1]
+    float u_norm = (static_cast<float>(max_u) + 0.5f) / static_cast<float>(m_pixel_width);
+    float v_norm = (static_cast<float>(max_v) + 0.5f) / static_cast<float>(m_pixel_height);
+
+    // Convert UV to spherical angles
+    // Equirectangular mapping:
+    // u [0,1] maps to azimuth phi [0, 2π]
+    // v [0,1] maps to elevation theta [π/2, -π/2] (top to bottom)
+    float phi = u_norm * glm::two_pi<float>();  // Azimuth [0, 2π]
+    float theta = (glm::half_pi<float>() - v_norm * glm::pi<float>());  // Elevation [π/2, -π/2]
+
+    info.azimuth = phi;
+    info.elevation = theta;
+
+    // Convert spherical angles to Cartesian direction vector
+    // Standard spherical coordinate conversion:
+    // x = cos(elevation) * cos(azimuth)
+    // y = sin(elevation)
+    // z = cos(elevation) * sin(azimuth)
+    float cos_theta = std::cos(theta);
+    float sin_theta = std::sin(theta);
+    float cos_phi = std::cos(phi);
+    float sin_phi = std::sin(phi);
+
+    info.direction.x = cos_theta * cos_phi;
+    info.direction.y = sin_theta;
+    info.direction.z = cos_theta * sin_phi;
+
+    // Normalize to ensure unit vector (guard against floating-point errors)
+    float length = glm::length(info.direction);
+    if (length > 0.0001f) {
+        info.direction = glm::normalize(info.direction);
+    }
+
+    // Cache result
+    m_sun_info = info;
+    m_sun_detected = true;
+
+    return info;
+}
+
+void HDRIEnvironment::align_sun_to_direction(const glm::vec3& target_sun_direction) {
+    // Detect sun if not already detected
+    if (!m_sun_detected) {
+        detect_sun();
+    }
+
+    // Early exit if no sun detected (indoor HDRI)
+    if (!m_sun_info.has_sun) {
+        return;
+    }
+
+    // Validate target direction
+    float target_length = glm::length(target_sun_direction);
+    if (target_length < 0.0001f) {
+        // Invalid target direction, cannot align
+        return;
+    }
+
+    // Normalize target direction
+    glm::vec3 target_normalized = glm::normalize(target_sun_direction);
+    glm::vec3 current_normalized = glm::normalize(m_sun_info.direction);
+
+    // Calculate rotation around Y-axis (azimuth adjustment only)
+    // This preserves the elevation angle of the sun in the HDRI
+    // We only rotate horizontally to align the sun disk direction
+
+    // Project both directions onto XZ plane (horizontal plane)
+    glm::vec2 current_xz(current_normalized.x, current_normalized.z);
+    glm::vec2 target_xz(target_normalized.x, target_normalized.z);
+
+    // Handle cases where sun is directly overhead/below
+    float current_xz_length = glm::length(current_xz);
+    float target_xz_length = glm::length(target_xz);
+
+    if (current_xz_length < 0.0001f || target_xz_length < 0.0001f) {
+        // Sun is at zenith or nadir, rotation is ambiguous
+        // Keep current rotation
+        return;
+    }
+
+    // Normalize horizontal projections
+    current_xz = glm::normalize(current_xz);
+    target_xz = glm::normalize(target_xz);
+
+    // Calculate angle between horizontal projections using atan2
+    // atan2(z, x) gives angle in range [-π, π]
+    float current_angle = std::atan2(current_xz.y, current_xz.x);
+    float target_angle = std::atan2(target_xz.y, target_xz.x);
+
+    // Calculate rotation needed (difference between angles)
+    float rotation_y = target_angle - current_angle;
+
+    // Normalize rotation to [-π, π] range
+    constexpr float pi = glm::pi<float>();
+    constexpr float two_pi = glm::two_pi<float>();
+
+    while (rotation_y > pi) {
+        rotation_y -= two_pi;
+    }
+    while (rotation_y < -pi) {
+        rotation_y += two_pi;
+    }
+
+    // Update rotation parameter
+    m_params.rotation_y = rotation_y;
+
+    // Update cached sun info with new rotated direction
+    // Apply Y-axis rotation to the original sun direction
+    float cos_rot = std::cos(rotation_y);
+    float sin_rot = std::sin(rotation_y);
+
+    glm::vec3 rotated_direction;
+    rotated_direction.x = current_normalized.x * cos_rot - current_normalized.z * sin_rot;
+    rotated_direction.y = current_normalized.y;  // Y unchanged (horizontal rotation)
+    rotated_direction.z = current_normalized.x * sin_rot + current_normalized.z * cos_rot;
+
+    m_sun_info.direction = glm::normalize(rotated_direction);
+
+    // Update azimuth (elevation stays the same)
+    m_sun_info.azimuth = std::atan2(rotated_direction.z, rotated_direction.x);
+    if (m_sun_info.azimuth < 0.0f) {
+        m_sun_info.azimuth += two_pi;
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

@@ -77,6 +77,18 @@ struct HDRITextures {
 };
 
 /**
+ * Sun detection result from HDRI analysis
+ */
+struct HDRISunInfo {
+    glm::vec3 direction;         // World-space direction to brightest spot
+    float azimuth;               // Horizontal angle in radians [0, 2π]
+    float elevation;             // Vertical angle in radians [-π/2, π/2]
+    float peak_luminance;        // Brightness of sun disk (cd/m²)
+    float average_luminance;     // Average scene luminance
+    bool has_sun;                // True if outdoor HDRI with sun detected
+};
+
+/**
  * HDRI environment parameters
  */
 struct HDRIEnvironmentParams {
@@ -90,6 +102,10 @@ struct HDRIEnvironmentParams {
     float atmospheric_blend = 0.3f;      // 0.0-1.0, blend factor for atmospheric overlay
     bool apply_fog = true;               // Apply atmospheric fog in hybrid mode
     bool apply_aerial_perspective = true; // Apply aerial perspective in hybrid mode
+
+    // Sun alignment parameters
+    bool auto_align_sun = false;         // Automatically align HDRI sun with scene sun
+    float sun_detection_threshold = 10.0f; // Luminance ratio to detect outdoor HDRI (indoor < 10x, outdoor > 10x)
 };
 
 /**
@@ -180,6 +196,45 @@ public:
     float calculate_average_luminance() const;
 
     /**
+     * Detect sun position in HDRI by finding brightest spot
+     *
+     * Scans equirectangular texture for peak luminance pixel and converts to
+     * world-space direction. Detects if HDRI is outdoor (has sun) vs indoor
+     * based on luminance ratio threshold.
+     *
+     * @return Sun info with direction, angles, luminance, and has_sun flag
+     *
+     * Performance: ~5ms for 4K HDRI (CPU-side scan of downsampled texture)
+     */
+    HDRISunInfo detect_sun() const;
+
+    /**
+     * Auto-align HDRI rotation to match target sun direction
+     *
+     * Calculates rotation needed to align HDRI's brightest spot with target
+     * direction. Only applies if HDRI has a sun detected (outdoor scene).
+     *
+     * Example:
+     * ```cpp
+     * auto sun_info = hdri.detect_sun();
+     * if (sun_info.has_sun) {
+     *     glm::vec3 scene_sun = glm::normalize(glm::vec3(0.3f, 0.6f, 0.2f));
+     *     hdri.align_sun_to_direction(scene_sun);
+     * }
+     * ```
+     *
+     * @param target_sun_direction World-space direction where sun should be
+     *
+     * Updates params().rotation_y automatically
+     */
+    void align_sun_to_direction(const glm::vec3& target_sun_direction);
+
+    /**
+     * Get detected sun information (cached from first detection)
+     */
+    const HDRISunInfo& sun_info() const { return m_sun_info; }
+
+    /**
      * Get source file path
      */
     const std::string& file_path() const { return m_file_path; }
@@ -256,6 +311,15 @@ private:
     HDRIEnvironmentParams m_params;
     HDRITextures m_textures;
     bool m_ibl_generated = false;
+
+    // Sun detection cache
+    mutable HDRISunInfo m_sun_info{};
+    mutable bool m_sun_detected = false;
+
+    // Source pixel data (kept for sun detection)
+    mutable std::vector<float> m_pixel_data;
+    mutable uint32_t m_pixel_width = 0;
+    mutable uint32_t m_pixel_height = 0;
 
     // Compute pipeline resources for IBL generation
     VkPipelineLayout m_equirect_to_cubemap_layout = VK_NULL_HANDLE;

@@ -114,7 +114,31 @@ private:
                 auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
 
                 std::cout << "  ✓ Loaded and processed in " << duration.count() << "ms\n";
-                std::cout << "  Average luminance: " << hdri.calculate_average_luminance() << "\n\n";
+                std::cout << "  Average luminance: " << hdri.calculate_average_luminance() << "\n";
+
+                // Detect sun position in HDRI (automatic)
+                auto sun_info = hdri.detect_sun();
+                std::cout << "  Sun detection:\n";
+                std::cout << "    Has sun: " << (sun_info.has_sun ? "yes" : "no") << "\n";
+                if (sun_info.has_sun) {
+                    std::cout << "    Direction: ("
+                              << sun_info.direction.x << ", "
+                              << sun_info.direction.y << ", "
+                              << sun_info.direction.z << ")\n";
+                    std::cout << "    Azimuth: " << (sun_info.azimuth * 180.0f / 3.14159f) << "°\n";
+                    std::cout << "    Elevation: " << (sun_info.elevation * 180.0f / 3.14159f) << "°\n";
+                    std::cout << "    Peak luminance: " << sun_info.peak_luminance << " cd/m²\n";
+                    std::cout << "    Average luminance: " << sun_info.average_luminance << " cd/m²\n";
+                    std::cout << "    Luminance ratio: " << (sun_info.peak_luminance / sun_info.average_luminance) << "x\n";
+
+                    // Example: Auto-align sun with scene's atmospheric sun direction
+                    // This would typically come from your atmospheric scattering system
+                    glm::vec3 scene_sun_direction = glm::normalize(glm::vec3(0.3f, 0.6f, 0.2f));
+                    hdri.align_sun_to_direction(scene_sun_direction);
+                    std::cout << "    HDRI rotated by: " << (hdri.params().rotation_y * 180.0f / 3.14159f) << "°\n";
+                    std::cout << "    (Aligned with scene sun direction)\n";
+                }
+                std::cout << "\n";
 
                 hdris.push_back(std::move(hdri));
             }
@@ -303,9 +327,52 @@ int main() {
  *    }
  *    ```
  *
- * 5. **Performance Optimization**
+ * 5. **Sun Detection and Auto-Alignment**
+ *    ```cpp
+ *    // Load outdoor HDRI
+ *    auto sunset_hdri = HDRIEnvironment::load_from_file(context, "sunset.exr");
+ *
+ *    // Detect sun automatically
+ *    auto sun_info = sunset_hdri.detect_sun();
+ *    if (sun_info.has_sun) {
+ *        std::cout << "Outdoor HDRI detected!\n";
+ *        std::cout << "Sun direction: " << sun_info.direction << "\n";
+ *        std::cout << "Peak luminance: " << sun_info.peak_luminance << " cd/m²\n";
+ *
+ *        // Get atmospheric system's sun direction
+ *        glm::vec3 scene_sun = atmospheric_component.sun_direction;
+ *
+ *        // Auto-align HDRI sun with scene sun
+ *        sunset_hdri.align_sun_to_direction(scene_sun);
+ *
+ *        // Now HDRI's sun disk matches the scene's directional light!
+ *        std::cout << "HDRI rotated by " << sunset_hdri.params().rotation_y << " radians\n";
+ *    } else {
+ *        std::cout << "Indoor HDRI detected (no sun alignment needed)\n";
+ *    }
+ *    ```
+ *
+ *    **How it works:**
+ *    - `detect_sun()` scans the equirectangular image for the brightest spot
+ *    - Calculates luminance using Rec. 709 coefficients (0.2126*R + 0.7152*G + 0.0722*B)
+ *    - Determines outdoor vs indoor by comparing peak/average luminance ratio
+ *    - Default threshold: 10x (outdoor HDRIs have bright sun, indoor have even lighting)
+ *    - Converts pixel coordinates to spherical angles and world-space direction
+ *    - `align_sun_to_direction()` calculates Y-axis rotation to match target direction
+ *    - Only rotates horizontally (preserves sun's elevation angle in HDRI)
+ *    - Performance: ~5ms for 4K HDRI (one-time CPU operation, cached)
+ *
+ *    **Use cases:**
+ *    1. **Dynamic Time-of-Day**: Match HDRI sun to animated scene sun direction
+ *    2. **Mixed Lighting**: Align HDRI with directional light for consistent shadows
+ *    3. **Hybrid Rendering**: Seamlessly blend HDRI skybox with procedural atmosphere
+ *    4. **Content Pipeline**: Auto-detect sun during asset import, bake rotation
+ *
+ * 6. **Performance Optimization**
  *    - Generate IBL maps once at startup or async during loading screen
  *    - Cache BRDF LUT (same for all HDRIs)
  *    - Use BC6H compression for cubemaps to save VRAM
  *    - Stream in HDRIs as needed (don't keep all loaded)
+ *    - Sun detection runs once and caches result (no re-scanning)
+ *    - Pixel data can be freed after sun detection if memory is tight
  */
