@@ -168,9 +168,24 @@ void DeferredRenderer::shutdown() {
         vkDestroyDescriptorSetLayout(device_, lights_descriptor_layout_, nullptr);
         lights_descriptor_layout_ = VK_NULL_HANDLE;
     }
+    if (ibl_descriptor_layout_ != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(device_, ibl_descriptor_layout_, nullptr);
+        ibl_descriptor_layout_ = VK_NULL_HANDLE;
+    }
     if (gbuffer_sampler_ != VK_NULL_HANDLE) {
         vkDestroySampler(device_, gbuffer_sampler_, nullptr);
         gbuffer_sampler_ = VK_NULL_HANDLE;
+    }
+    if (ibl_sampler_ != VK_NULL_HANDLE) {
+        vkDestroySampler(device_, ibl_sampler_, nullptr);
+        ibl_sampler_ = VK_NULL_HANDLE;
+    }
+
+    // Destroy IBL UBO buffer
+    if (ibl_ubo_buffer_ != VK_NULL_HANDLE) {
+        vmaDestroyBuffer(allocator_, ibl_ubo_buffer_, ibl_ubo_allocation_);
+        ibl_ubo_buffer_ = VK_NULL_HANDLE;
+        ibl_ubo_allocation_ = VK_NULL_HANDLE;
     }
 
     // Destroy light buffer
@@ -854,18 +869,21 @@ void DeferredRenderer::create_descriptor_sets() {
     LOG_DEBUG(Graphics, "Creating descriptor sets");
 
     // Create descriptor pool
-    std::array<VkDescriptorPoolSize, 2> pool_sizes{};
+    std::array<VkDescriptorPoolSize, 3> pool_sizes{};
     pool_sizes[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    pool_sizes[0].descriptorCount = 4; // 4 G-Buffer textures
+    pool_sizes[0].descriptorCount = 7; // 4 G-Buffer textures + 3 IBL cubemaps
 
     pool_sizes[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     pool_sizes[1].descriptorCount = 1; // 1 lights buffer
+
+    pool_sizes[2].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    pool_sizes[2].descriptorCount = 1; // 1 IBL UBO
 
     VkDescriptorPoolCreateInfo pool_info{};
     pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     pool_info.poolSizeCount = static_cast<uint32_t>(pool_sizes.size());
     pool_info.pPoolSizes = pool_sizes.data();
-    pool_info.maxSets = 2; // G-Buffer set + lights set
+    pool_info.maxSets = 3; // G-Buffer set + lights set + IBL set
 
     check_vk_result(
         vkCreateDescriptorPool(device_, &pool_info, nullptr, &descriptor_pool_),
@@ -910,10 +928,52 @@ void DeferredRenderer::create_descriptor_sets() {
         "create lights descriptor set layout"
     );
 
+    // Create IBL descriptor set layout (3 cubemaps + 1 UBO)
+    std::array<VkDescriptorSetLayoutBinding, 4> ibl_bindings{};
+
+    // Binding 0: Irradiance cubemap
+    ibl_bindings[0].binding = 0;
+    ibl_bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    ibl_bindings[0].descriptorCount = 1;
+    ibl_bindings[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    ibl_bindings[0].pImmutableSamplers = nullptr;
+
+    // Binding 1: Prefiltered environment cubemap
+    ibl_bindings[1].binding = 1;
+    ibl_bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    ibl_bindings[1].descriptorCount = 1;
+    ibl_bindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    ibl_bindings[1].pImmutableSamplers = nullptr;
+
+    // Binding 2: BRDF LUT
+    ibl_bindings[2].binding = 2;
+    ibl_bindings[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    ibl_bindings[2].descriptorCount = 1;
+    ibl_bindings[2].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    ibl_bindings[2].pImmutableSamplers = nullptr;
+
+    // Binding 3: IBL UBO
+    ibl_bindings[3].binding = 3;
+    ibl_bindings[3].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    ibl_bindings[3].descriptorCount = 1;
+    ibl_bindings[3].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    ibl_bindings[3].pImmutableSamplers = nullptr;
+
+    VkDescriptorSetLayoutCreateInfo ibl_layout_info{};
+    ibl_layout_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    ibl_layout_info.bindingCount = static_cast<uint32_t>(ibl_bindings.size());
+    ibl_layout_info.pBindings = ibl_bindings.data();
+
+    check_vk_result(
+        vkCreateDescriptorSetLayout(device_, &ibl_layout_info, nullptr, &ibl_descriptor_layout_),
+        "create IBL descriptor set layout"
+    );
+
     // Allocate descriptor sets
-    std::array<VkDescriptorSetLayout, 2> layouts = {
+    std::array<VkDescriptorSetLayout, 3> layouts = {
         gbuffer_descriptor_layout_,
-        lights_descriptor_layout_
+        lights_descriptor_layout_,
+        ibl_descriptor_layout_
     };
 
     VkDescriptorSetAllocateInfo alloc_info{};
@@ -922,7 +982,7 @@ void DeferredRenderer::create_descriptor_sets() {
     alloc_info.descriptorSetCount = static_cast<uint32_t>(layouts.size());
     alloc_info.pSetLayouts = layouts.data();
 
-    std::array<VkDescriptorSet, 2> descriptor_sets;
+    std::array<VkDescriptorSet, 3> descriptor_sets;
     check_vk_result(
         vkAllocateDescriptorSets(device_, &alloc_info, descriptor_sets.data()),
         "allocate descriptor sets"
@@ -930,6 +990,7 @@ void DeferredRenderer::create_descriptor_sets() {
 
     gbuffer_descriptor_set_ = descriptor_sets[0];
     lights_descriptor_set_ = descriptor_sets[1];
+    ibl_descriptor_set_ = descriptor_sets[2];
 
     // Create texture sampler for G-Buffer
     VkSamplerCreateInfo sampler_info{};
@@ -950,9 +1011,48 @@ void DeferredRenderer::create_descriptor_sets() {
         "create G-Buffer sampler"
     );
 
+    // Create texture sampler for IBL cubemaps (linear filtering, mipmaps)
+    VkSamplerCreateInfo ibl_sampler_info{};
+    ibl_sampler_info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    ibl_sampler_info.magFilter = VK_FILTER_LINEAR;
+    ibl_sampler_info.minFilter = VK_FILTER_LINEAR;
+    ibl_sampler_info.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    ibl_sampler_info.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    ibl_sampler_info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    ibl_sampler_info.anisotropyEnable = VK_FALSE;
+    ibl_sampler_info.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK;
+    ibl_sampler_info.unnormalizedCoordinates = VK_FALSE;
+    ibl_sampler_info.compareEnable = VK_FALSE;
+    ibl_sampler_info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    ibl_sampler_info.minLod = 0.0f;
+    ibl_sampler_info.maxLod = VK_LOD_CLAMP_NONE;  // Allow all mip levels
+
+    check_vk_result(
+        vkCreateSampler(device_, &ibl_sampler_info, nullptr, &ibl_sampler_),
+        "create IBL sampler"
+    );
+
+    // Create IBL UBO buffer
+    VkBufferCreateInfo ibl_ubo_info{};
+    ibl_ubo_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    ibl_ubo_info.size = sizeof(IBLConfig);  // 4 floats = 16 bytes
+    ibl_ubo_info.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+    ibl_ubo_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    VmaAllocationCreateInfo ibl_alloc_info{};
+    ibl_alloc_info.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
+    ibl_alloc_info.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT;
+
+    check_vk_result(
+        vmaCreateBuffer(allocator_, &ibl_ubo_info, &ibl_alloc_info,
+                       &ibl_ubo_buffer_, &ibl_ubo_allocation_, nullptr),
+        "create IBL UBO buffer"
+    );
+
     // Update descriptor sets with initial data
     update_gbuffer_descriptor_set();
     update_lights_descriptor_set();
+    // Note: IBL descriptor set will be updated when textures are set via set_ibl_textures()
 
     LOG_INFO(Graphics, "Descriptor sets created successfully");
 }
@@ -1020,6 +1120,102 @@ void DeferredRenderer::update_lights_descriptor_set() {
     vkUpdateDescriptorSets(device_, 1, &descriptor_write, 0, nullptr);
 
     LOG_DEBUG(Graphics, "Lights descriptor set updated");
+}
+
+void DeferredRenderer::update_ibl_descriptor_set() {
+    if (ibl_descriptor_set_ == VK_NULL_HANDLE) {
+        return;
+    }
+
+    // Check if IBL textures are bound
+    if (ibl_textures_.irradiance == VK_NULL_HANDLE ||
+        ibl_textures_.prefiltered == VK_NULL_HANDLE ||
+        ibl_textures_.brdf_lut == VK_NULL_HANDLE) {
+        LOG_WARNING(Graphics, "IBL textures not fully bound, skipping descriptor update");
+        return;
+    }
+
+    // Prepare descriptor image info for IBL textures
+    std::array<VkDescriptorImageInfo, 3> image_infos{};
+
+    // Irradiance cubemap
+    image_infos[0].sampler = ibl_sampler_;
+    image_infos[0].imageView = ibl_textures_.irradiance;
+    image_infos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    // Prefiltered environment cubemap
+    image_infos[1].sampler = ibl_sampler_;
+    image_infos[1].imageView = ibl_textures_.prefiltered;
+    image_infos[1].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    // BRDF integration LUT
+    image_infos[2].sampler = ibl_sampler_;
+    image_infos[2].imageView = ibl_textures_.brdf_lut;
+    image_infos[2].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    // Prepare descriptor buffer info for IBL UBO
+    VkDescriptorBufferInfo buffer_info{};
+    buffer_info.buffer = ibl_ubo_buffer_;
+    buffer_info.offset = 0;
+    buffer_info.range = sizeof(IBLConfig);
+
+    // Write descriptor updates
+    std::array<VkWriteDescriptorSet, 4> descriptor_writes{};
+
+    // Texture descriptors (bindings 0-2)
+    for (uint32_t i = 0; i < 3; i++) {
+        descriptor_writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        descriptor_writes[i].dstSet = ibl_descriptor_set_;
+        descriptor_writes[i].dstBinding = i;
+        descriptor_writes[i].dstArrayElement = 0;
+        descriptor_writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        descriptor_writes[i].descriptorCount = 1;
+        descriptor_writes[i].pImageInfo = &image_infos[i];
+    }
+
+    // UBO descriptor (binding 3)
+    descriptor_writes[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptor_writes[3].dstSet = ibl_descriptor_set_;
+    descriptor_writes[3].dstBinding = 3;
+    descriptor_writes[3].dstArrayElement = 0;
+    descriptor_writes[3].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    descriptor_writes[3].descriptorCount = 1;
+    descriptor_writes[3].pBufferInfo = &buffer_info;
+
+    vkUpdateDescriptorSets(device_, static_cast<uint32_t>(descriptor_writes.size()),
+                          descriptor_writes.data(), 0, nullptr);
+
+    LOG_DEBUG(Graphics, "IBL descriptor set updated");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// IBL Management
+// ═══════════════════════════════════════════════════════════════════════════════
+
+void DeferredRenderer::set_ibl_textures(const IBLTextures& textures) {
+    LOG_DEBUG(Graphics, "Setting IBL textures");
+
+    ibl_textures_ = textures;
+
+    // Update descriptor set with new textures
+    update_ibl_descriptor_set();
+
+    LOG_INFO(Graphics, "IBL textures set successfully");
+}
+
+void DeferredRenderer::set_ibl_config(const IBLConfig& config) {
+    LOG_DEBUG(Graphics, "Updating IBL configuration");
+
+    ibl_config_ = config;
+
+    // Update UBO with new configuration
+    void* data;
+    vmaMapMemory(allocator_, ibl_ubo_allocation_, &data);
+    memcpy(data, &ibl_config_, sizeof(IBLConfig));
+    vmaUnmapMemory(allocator_, ibl_ubo_allocation_);
+
+    LOG_DEBUG(Graphics, "IBL configuration updated: intensity={}, rotation={}, blend={}, max_lod={}",
+             config.intensity, config.rotation_y, config.atmospheric_blend, config.max_reflection_lod);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
