@@ -100,6 +100,9 @@ struct alignas(16) Light {
     uint32_t type;                // LightType
     uint32_t casts_shadows;       // 0 or 1
     uint32_t padding;             // Alignment padding
+
+    // Additional padding to reach 80 bytes (16 more bytes needed)
+    uint32_t padding2[4];
 };
 
 static_assert(sizeof(Light) == 80, "Light struct must be 80 bytes for GPU alignment");
@@ -123,6 +126,9 @@ struct alignas(16) PBRMaterial {
     uint32_t emissive_texture{0};            // Emissive texture
     uint32_t ao_texture{0};                  // AO texture
     uint32_t padding;
+
+    // Additional padding to reach 80 bytes (16 more bytes needed)
+    uint32_t padding2[4];
 };
 
 static_assert(sizeof(PBRMaterial) == 80, "PBRMaterial struct must be 80 bytes for GPU alignment");

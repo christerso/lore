@@ -1,4 +1,5 @@
 #include <lore/graphics/deferred_renderer.hpp>
+#include <lore/graphics/post_process_pipeline.hpp>
 #include <lore/core/log.hpp>
 
 #include <stdexcept>
@@ -2196,12 +2197,9 @@ void DeferredRenderer::set_shadow_config(const ShadowConfig& config) {
     }
 }
 
-} // namespace lore::graphics
 // ═══════════════════════════════════════════════════════════════════════════════
 // Post-Processing Integration
 // ═══════════════════════════════════════════════════════════════════════════════
-
-#include <lore/graphics/post_process_pipeline.hpp>
 
 void DeferredRenderer::create_hdr_buffer(VkExtent2D extent) {
     // Create HDR buffer for post-processing (RGBA16F format)
@@ -2240,3 +2238,4 @@ PostProcessConfig& DeferredRenderer::get_post_process_config_mut() {
     return const_cast<PostProcessConfig&>(post_process_pipeline_->get_config());
 }
 
+} // namespace lore::graphics

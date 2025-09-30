@@ -7,6 +7,7 @@
 #include <stdexcept>
 #include <cstring>
 #include <cmath>
+#include <unordered_map>
 
 namespace lore::graphics {
 

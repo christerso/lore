@@ -130,10 +130,13 @@ CPMAddPackage(
     NAME glm
     GITHUB_REPOSITORY g-truc/glm
     GIT_TAG 1.0.1
+    GIT_SHALLOW TRUE
     OPTIONS
         "GLM_ENABLE_CXX_23 ON"
         "BUILD_SHARED_LIBS OFF"
         "GLM_DISABLE_AUTO_DETECTION ON"
+        "BUILD_TESTING OFF"
+        "GLM_BUILD_TESTS OFF"
 )
 
 # Disable GLM SIMD to avoid conflicts with our custom SIMD
@@ -153,6 +156,22 @@ CPMAddPackage(
 if(miniaudio_ADDED)
     add_library(miniaudio INTERFACE)
     target_include_directories(miniaudio INTERFACE ${miniaudio_SOURCE_DIR})
+endif()
+
+# miniz for compression (needed by tinyexr)
+# Using header-only mode via direct download
+CPMAddPackage(
+    NAME miniz
+    GITHUB_REPOSITORY richgel999/miniz
+    GIT_TAG 3.0.2
+    DOWNLOAD_ONLY YES
+)
+
+# Create header-only interface library for miniz
+if(miniz_ADDED)
+    add_library(miniz INTERFACE)
+    target_include_directories(miniz INTERFACE ${miniz_SOURCE_DIR})
+    target_compile_definitions(miniz INTERFACE MINIZ_NO_ZLIB_COMPATIBLE_NAMES)
 endif()
 
 # Disable warnings for all third-party libraries
@@ -213,11 +232,15 @@ target_disable_external_warnings(lore)
 # Function to compile GLSL shaders to SPIR-V
 function(compile_shader SHADER_SOURCE SHADER_OUTPUT)
     get_filename_component(SHADER_NAME ${SHADER_SOURCE} NAME)
+
+    # Use the glslangValidator built by CPM
+    set(GLSLANG_VALIDATOR ${CMAKE_BINARY_DIR}/_deps/glslang-build/StandAlone/$<CONFIG>/glslangValidator.exe)
+
     add_custom_command(
         OUTPUT ${SHADER_OUTPUT}
         COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/shaders/compiled
-        COMMAND glslangValidator -V ${SHADER_SOURCE} -o ${SHADER_OUTPUT}
-        DEPENDS ${SHADER_SOURCE}
+        COMMAND ${GLSLANG_VALIDATOR} -V ${SHADER_SOURCE} -o ${SHADER_OUTPUT}
+        DEPENDS ${SHADER_SOURCE} glslang
         COMMENT "Compiling ${SHADER_NAME} to SPIR-V"
         VERBATIM
     )

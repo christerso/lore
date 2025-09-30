@@ -1,5 +1,8 @@
 #include <lore/graphics/hdri_environment.hpp>
 
+#define MINIZ_NO_ZLIB_COMPATIBLE_NAMES
+#include <miniz.h>
+
 #define TINYEXR_IMPLEMENTATION
 #include <tinyexr.h>
 
