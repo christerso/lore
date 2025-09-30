@@ -1,0 +1,28 @@
+{
+  "mcpServers": {
+    "task-master-ai": {
+      "command": "npx",
+      "args": ["-y", "task-master-ai"],
+      "env": {
+        "ANTHROPIC_API_KEY": "${ANTHROPIC_API_KEY}"
+      }
+    },
+    "everything-mcp-server": {
+      "command": "npx",
+      "args": ["-y", "@eidam/mcp-server-everything"],
+      "env": {}
+    },
+    "obsidian-advanced": {
+      "command": "npx",
+      "args": ["-y", "@jasonm/mcp-server-obsidian"],
+      "env": {
+        "OBSIDIAN_VAULT_PATH": "C:/Users/chris/Documents/Obsidian Vault"
+      }
+    },
+    "context7": {
+      "command": "npx",
+      "args": ["-y", "@upthree/mcp-server-context7"],
+      "env": {}
+    }
+  }
+}

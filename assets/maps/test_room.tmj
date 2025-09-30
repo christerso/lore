@@ -1,0 +1,140 @@
+{
+  "compressionlevel": -1,
+  "height": 11,
+  "infinite": false,
+  "layers": [
+    {
+      "data": [
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+        1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1,
+        1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1,
+        1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1,
+        1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1,
+        1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1,
+        1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1,
+        1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1,
+        1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1,
+        1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1,
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1
+      ],
+      "height": 11,
+      "id": 1,
+      "name": "Walls",
+      "opacity": 1,
+      "type": "tilelayer",
+      "visible": true,
+      "width": 11,
+      "x": 0,
+      "y": 0
+    }
+  ],
+  "nextlayerid": 2,
+  "nextobjectid": 1,
+  "orientation": "orthogonal",
+  "renderorder": "right-down",
+  "tiledversion": "1.11.0",
+  "tileheight": 32,
+  "tilesets": [
+    {
+      "columns": 0,
+      "firstgid": 1,
+      "grid": {
+        "height": 1,
+        "orientation": "orthogonal",
+        "width": 1
+      },
+      "margin": 0,
+      "name": "GameTiles",
+      "spacing": 0,
+      "tilecount": 2,
+      "tiledversion": "1.11.0",
+      "tileheight": 32,
+      "tiles": [
+        {
+          "id": 0,
+          "properties": [
+            {
+              "name": "mesh_path",
+              "type": "string",
+              "value": "assets/models/tiles/Cube.fbx"
+            },
+            {
+              "name": "height",
+              "type": "float",
+              "value": 1.0
+            },
+            {
+              "name": "collision_type",
+              "type": "string",
+              "value": "box"
+            },
+            {
+              "name": "walkable",
+              "type": "bool",
+              "value": false
+            },
+            {
+              "name": "blocks_sight",
+              "type": "bool",
+              "value": true
+            },
+            {
+              "name": "material_id",
+              "type": "int",
+              "value": 0
+            }
+          ],
+          "type": "Wall"
+        },
+        {
+          "id": 1,
+          "properties": [
+            {
+              "name": "mesh_path",
+              "type": "string",
+              "value": "assets/models/tiles/FloorTile.fbx"
+            },
+            {
+              "name": "height",
+              "type": "float",
+              "value": 0.1
+            },
+            {
+              "name": "collision_type",
+              "type": "string",
+              "value": "none"
+            },
+            {
+              "name": "walkable",
+              "type": "bool",
+              "value": true
+            },
+            {
+              "name": "blocks_sight",
+              "type": "bool",
+              "value": false
+            },
+            {
+              "name": "transparency",
+              "type": "float",
+              "value": 1.0
+            },
+            {
+              "name": "material_id",
+              "type": "int",
+              "value": 1
+            }
+          ],
+          "type": "Floor"
+        }
+      ],
+      "tilewidth": 32,
+      "type": "tileset",
+      "version": "1.10"
+    }
+  ],
+  "tilewidth": 32,
+  "type": "map",
+  "version": "1.10",
+  "width": 11
+}

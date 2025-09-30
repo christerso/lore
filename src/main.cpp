@@ -1,4 +1,6 @@
 #include <lore/graphics/graphics.hpp>
+#include <lore/world/tilemap_world_system.hpp>
+#include <lore/world/tiled_importer.hpp>
 // #include <lore/ecs/ecs.hpp>
 // #include <lore/math/math.hpp>
 // #include <lore/physics/physics.hpp>
@@ -107,17 +109,29 @@ int main(int, char*[]) {
         // Initialize graphics system (already working)
         auto& graphics = lore::graphics::GraphicsSystem::instance();
 
-        graphics.create_window(800, 600, "Lore Engine - Advanced Systems Architecture");
+        graphics.create_window(800, 600, "Lore Engine - Test Room Demo");
         graphics.initialize();
+
+        // Initialize world system
+        lore::world::TilemapWorldSystem world_system;
+        std::cout << "TilemapWorldSystem initialized\n";
+
+        // Load test room from Tiled
+        lore::world::TiledImporter tiled_importer;
+        lore::world::TiledMap test_room = tiled_importer.load_from_file("assets/maps/test_room.tmj");
+        std::cout << "Loaded test room: " << test_room.width << "x" << test_room.height << " tiles\n";
+
+        // Import to world system
+        tiled_importer.import_to_world(world_system, test_room, 0.0f, 0.0f, 0.0f);
+        std::cout << "Imported " << test_room.layers.size() << " layers to world\n";
 
         auto last_time = std::chrono::high_resolution_clock::now();
 
-        std::cout << "Lore Engine Started Successfully!\n";
+        std::cout << "\nLore Engine Started Successfully!\n";
         std::cout << "- Vulkan triangle renderer: ACTIVE\n";
-        std::cout << "- ECS system interfaces: READY\n";
-        std::cout << "- Physics system interfaces: READY\n";
-        std::cout << "- Audio system interfaces: READY\n";
-        std::cout << "- All systems use getter/setter APIs for implementation\n";
+        std::cout << "- TilemapWorldSystem: LOADED\n";
+        std::cout << "- Test room (11x11): IMPORTED\n";
+        std::cout << "- FBX meshes referenced: 2 (Cube, FloorTile)\n";
         std::cout << "\nPress ESC or close window to exit.\n";
 
         while (!graphics.should_close()) {
