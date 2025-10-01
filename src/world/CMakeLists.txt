@@ -6,6 +6,7 @@ add_library(lore_world STATIC
     voronoi_fracture.cpp
     debris_physics.cpp
     tile_damage.cpp
+    fluid_debris_interaction.cpp
 )
 
 # Link dependencies
